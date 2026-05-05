@@ -1,0 +1,10 @@
+# https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Allow: /
+
+# Disallow admin routes
+User-agent: *
+Disallow: /admin
+
+# Sitemap
+Sitemap: https://impactglobe.com/sitemap.xml
