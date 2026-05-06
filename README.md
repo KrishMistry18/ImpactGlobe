@@ -2,7 +2,7 @@
 
 A real-time geopolitical and financial intelligence dashboard built on a 3D interactive globe. ImpactGlobe monitors world events, environmental data, and forex market impacts — all in one place.
 
-Live Deployment Link:-
+🌍 Live Deployment Link
 <br>https://impact-globe.vercel.app/
 
 ## Features
@@ -149,8 +149,8 @@ Cron jobs run automatically on Vercel:
 | `TWELVE_DATA_API_KEY` | ✅ | Twelve Data forex API key |
 | `ADMIN_SECRET` | ✅ | Secret for admin API endpoints |
 | `CRON_SECRET` | ✅ | Secret for cron job endpoints |
-| `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | ⬜ | VAPID public key for push notifications |
-| `VAPID_PRIVATE_KEY` | ⬜ | VAPID private key for push notifications |
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | ✅ | VAPID public key for push notifications |
+| `VAPID_PRIVATE_KEY` | ✅ | VAPID private key for push notifications |
 
 ## License
 
