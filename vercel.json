@@ -1,49 +1,49 @@
 {
   "crons": [
     {
-      "path": "/api/forex/refresh",
-      "schedule": "* * * * *",
-      "comment": "Every minute. Rotation: minute%5 → pair index. Each pair updated once per 5 minutes. 288 calls/day × 2 credits = 576/day (under 800 free limit). Full cycle: 5 minutes."
+      "path": "/api/news/gemini",
+      "schedule": "0 0 * * *",
+      "comment": "Daily at midnight UTC. Generates 20 AI events via Gemini. Internal 4h guard prevents redundant runs."
     },
     {
       "path": "/api/rss/poll",
-      "schedule": "*/10 * * * *",
-      "comment": "Every 10 minutes. Polls 25+ RSS feeds, analyzes with Gemini AI (skips if last event < 4h old), creates globe ripple events."
+      "schedule": "0 6 * * *",
+      "comment": "Daily at 6am UTC. Polls RSS feeds and analyzes with Gemini AI."
     },
     {
-      "path": "/api/news/poll",
-      "schedule": "*/30 * * * *",
-      "comment": "Every 30 minutes. Fetches from NewsData.io (no AI needed). 48 calls/day, well under 200/day free limit."
+      "path": "/api/forex/refresh",
+      "schedule": "0 8 * * *",
+      "comment": "Daily at 8am UTC. Refreshes forex pair data from Twelve Data."
     },
     {
       "path": "/api/env/earthquakes",
-      "schedule": "*/5 * * * *",
-      "comment": "Every 5 minutes. USGS earthquake feed — no API key, no rate limit."
+      "schedule": "0 10 * * *",
+      "comment": "Daily at 10am UTC. USGS earthquake feed — no API key required."
     },
     {
       "path": "/api/env/wildfires",
-      "schedule": "*/15 * * * *",
-      "comment": "Every 15 minutes. NASA EONET wildfires."
+      "schedule": "0 12 * * *",
+      "comment": "Daily at noon UTC. NASA EONET wildfire data."
     },
     {
       "path": "/api/env/aqi",
-      "schedule": "*/30 * * * *",
-      "comment": "Every 30 minutes. Open-Meteo Air Quality — refreshes one zone per call."
+      "schedule": "0 14 * * *",
+      "comment": "Daily at 2pm UTC. Open-Meteo Air Quality — refreshes one zone per call."
     },
     {
       "path": "/api/env/weather",
-      "schedule": "0 * * * *",
-      "comment": "Every hour. Open-Meteo wind + temperature — refreshes one zone per call."
+      "schedule": "0 16 * * *",
+      "comment": "Daily at 4pm UTC. Open-Meteo wind + temperature data."
     },
     {
       "path": "/api/env/sea-temp",
-      "schedule": "0 */6 * * *",
-      "comment": "Every 6 hours. Open-Meteo Marine sea surface temperature."
+      "schedule": "0 18 * * *",
+      "comment": "Daily at 6pm UTC. Open-Meteo Marine sea surface temperature."
     },
     {
       "path": "/api/cron/cleanup",
-      "schedule": "0 */6 * * *",
-      "comment": "Every 6 hours. Purges data older than 3 days. The route itself tracks last run time and skips if <6h have passed — so it's safe to call frequently and resilient to server downtime."
+      "schedule": "0 2 * * *",
+      "comment": "Daily at 2am UTC. Purges expired events and stale cache data."
     }
   ]
 }
