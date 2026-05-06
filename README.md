@@ -3,7 +3,7 @@
 A real-time geopolitical and financial intelligence dashboard built on a 3D interactive globe. ImpactGlobe monitors world events, environmental data, and forex market impacts — all in one place.
 
 Live Deployment Link:-
-https://impact-globe.vercel.app/
+<br>https://impact-globe.vercel.app/
 
 ## Features
 
