@@ -2,48 +2,39 @@
   "crons": [
     {
       "path": "/api/news/gemini",
-      "schedule": "0 0 * * *",
-      "comment": "Daily at midnight UTC. Generates 20 AI events via Gemini. Internal 4h guard prevents redundant runs."
+      "schedule": "0 0 * * *"
     },
     {
       "path": "/api/rss/poll",
-      "schedule": "0 6 * * *",
-      "comment": "Daily at 6am UTC. Polls RSS feeds and analyzes with Gemini AI."
+      "schedule": "0 6 * * *"
     },
     {
       "path": "/api/forex/refresh",
-      "schedule": "0 8 * * *",
-      "comment": "Daily at 8am UTC. Refreshes forex pair data from Twelve Data."
+      "schedule": "0 8 * * *"
     },
     {
       "path": "/api/env/earthquakes",
-      "schedule": "0 10 * * *",
-      "comment": "Daily at 10am UTC. USGS earthquake feed — no API key required."
+      "schedule": "0 10 * * *"
     },
     {
       "path": "/api/env/wildfires",
-      "schedule": "0 12 * * *",
-      "comment": "Daily at noon UTC. NASA EONET wildfire data."
+      "schedule": "0 12 * * *"
     },
     {
       "path": "/api/env/aqi",
-      "schedule": "0 14 * * *",
-      "comment": "Daily at 2pm UTC. Open-Meteo Air Quality — refreshes one zone per call."
+      "schedule": "0 14 * * *"
     },
     {
       "path": "/api/env/weather",
-      "schedule": "0 16 * * *",
-      "comment": "Daily at 4pm UTC. Open-Meteo wind + temperature data."
+      "schedule": "0 16 * * *"
     },
     {
       "path": "/api/env/sea-temp",
-      "schedule": "0 18 * * *",
-      "comment": "Daily at 6pm UTC. Open-Meteo Marine sea surface temperature."
+      "schedule": "0 18 * * *"
     },
     {
       "path": "/api/cron/cleanup",
-      "schedule": "0 2 * * *",
-      "comment": "Daily at 2am UTC. Purges expired events and stale cache data."
+      "schedule": "0 2 * * *"
     }
   ]
 }
