@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { adminDb, adminAuth } from '@/lib/firebase/admin'
 
 /**
  * GET /api/events/[id]
@@ -11,28 +11,18 @@ export async function GET(
 ) {
   try {
     const { id } = await params
-    const supabase = await createClient()
+    
+    const docRef = await adminDb.collection('events').doc(id).get()
 
-    const { data, error } = await supabase
-      .from('events')
-      .select('*')
-      .eq('id', id)
-      .single()
-
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return NextResponse.json({ error: 'Event not found' }, { status: 404 })
-      }
-      console.error('Failed to fetch event:', error)
-      return NextResponse.json(
-        { error: 'Failed to fetch event' },
-        { status: 500 }
-      )
+    if (!docRef.exists) {
+      return NextResponse.json({ error: 'Event not found' }, { status: 404 })
     }
+
+    const data = docRef.data()!
 
     // Transform to app format
     const event = {
-      id: data.id,
+      id: docRef.id,
       headline: data.headline,
       country: data.country,
       lat: Number(data.lat),
@@ -42,7 +32,7 @@ export async function GET(
       summary: data.summary,
       sentiment: data.sentiment,
       forexImpacts: data.forex_impacts || [],
-      confidenceScore: Number(data.confidence_score) * 100,
+      confidenceScore: Number(data.confidence_score) * (data.confidence_score <= 1 ? 100 : 1),
       isMarketMoving: data.is_market_moving,
       publishedAt: data.published_at,
       expiresAt: data.expires_at,
@@ -74,26 +64,22 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params
-    const supabase = await createClient()
-
+    
     // Check authentication
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { error } = await supabase.from('events').delete().eq('id', id)
-
-    if (error) {
-      console.error('Failed to delete event:', error)
-      return NextResponse.json(
-        { error: 'Failed to delete event' },
-        { status: 500 }
-      )
+    const token = authHeader.split('Bearer ')[1]
+    
+    try {
+      await adminAuth.verifyIdToken(token)
+    } catch (e) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    await adminDb.collection('events').doc(id).delete()
 
     return NextResponse.json({ success: true })
   } catch (error) {
@@ -115,14 +101,18 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params
-    const supabase = await createClient()
-
+    
     // Check authentication
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
-    if (!user) {
+    const token = authHeader.split('Bearer ')[1]
+    
+    try {
+      await adminAuth.verifyIdToken(token)
+    } catch (e) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -145,24 +135,14 @@ export async function PATCH(
     if (body.isMarketMoving !== undefined)
       updates.is_market_moving = body.isMarketMoving
 
-    const { data, error } = await supabase
-      .from('events')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single()
+    await adminDb.collection('events').doc(id).update(updates)
 
-    if (error) {
-      console.error('Failed to update event:', error)
-      return NextResponse.json(
-        { error: 'Failed to update event' },
-        { status: 500 }
-      )
-    }
+    const updatedDoc = await adminDb.collection('events').doc(id).get()
+    const data = updatedDoc.data()!
 
     // Transform to app format
     const event = {
-      id: data.id,
+      id: updatedDoc.id,
       headline: data.headline,
       country: data.country,
       lat: Number(data.lat),

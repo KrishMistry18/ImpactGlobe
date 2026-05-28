@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createAdminClient } from '@/lib/supabase/server'
+import { adminDb } from '@/lib/firebase/admin'
 
 const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000  // events retention window
 const SIX_HOURS_MS         =  6 * 60 * 60 * 1000  // env cache / dedup retention
@@ -7,6 +7,25 @@ const CLEANUP_INTERVAL_MS  =  1 * 60 * 60 * 1000  // run at most every 1 hour
 
 // In-memory fallback for last run time (used if DB constraint blocks the marker row)
 let lastRunInMemory: Date | null = null
+
+async function deleteInBatches(query: FirebaseFirestore.Query) {
+  let deletedCount = 0;
+  
+  while (true) {
+    const snapshot = await query.limit(500).get();
+    if (snapshot.empty) break;
+
+    const batch = adminDb.batch();
+    snapshot.docs.forEach((doc) => {
+      batch.delete(doc.ref);
+      deletedCount++;
+    });
+    
+    await batch.commit();
+  }
+  
+  return deletedCount;
+}
 
 /**
  * GET /api/cron/cleanup
@@ -42,7 +61,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const supabase = createAdminClient()
   const now = new Date()
 
   // ── Check last run time ────────────────────────────────────────────────────
@@ -61,23 +79,22 @@ export async function GET(request: NextRequest) {
     }
 
     // Also check DB (persists across server restarts)
-    const { data: lastRunRow } = await supabase
-      .from('env_data_cache')
-      .select('fetched_at')
-      .eq('layer_type', 'cleanup_last_run')
-      .single()
+    const lastRunDoc = await adminDb.collection('env_data_cache').doc('cleanup_last_run').get()
 
-    if (lastRunRow?.fetched_at) {
-      const lastRun = new Date(lastRunRow.fetched_at)
-      const msSince = now.getTime() - lastRun.getTime()
-      if (msSince < CLEANUP_INTERVAL_MS) {
-        const nextIn = Math.round((CLEANUP_INTERVAL_MS - msSince) / 60_000)
-        lastRunInMemory = lastRun // sync to memory
-        return NextResponse.json({
-          success: true, skipped: true,
-          reason: `Last cleanup ${Math.round(msSince / 60_000)}min ago (DB). Next in ~${nextIn}min.`,
-          nextRunInMinutes: nextIn,
-        })
+    if (lastRunDoc.exists) {
+      const lastRunData = lastRunDoc.data()
+      if (lastRunData?.fetched_at) {
+        const lastRun = new Date(lastRunData.fetched_at)
+        const msSince = now.getTime() - lastRun.getTime()
+        if (msSince < CLEANUP_INTERVAL_MS) {
+          const nextIn = Math.round((CLEANUP_INTERVAL_MS - msSince) / 60_000)
+          lastRunInMemory = lastRun // sync to memory
+          return NextResponse.json({
+            success: true, skipped: true,
+            reason: `Last cleanup ${Math.round(msSince / 60_000)}min ago (DB). Next in ~${nextIn}min.`,
+            nextRunInMinutes: nextIn,
+          })
+        }
       }
     }
   }
@@ -92,14 +109,11 @@ export async function GET(request: NextRequest) {
 
   // ── 1. Events ──────────────────────────────────────────────────────────────
   try {
-    const { error, count } = await supabase
-      .from('events')
-      .delete({ count: 'exact' })
-      .lt('created_at', eventCutoff)
+    const query = adminDb.collection('events').where('created_at', '<', eventCutoff);
+    const count = await deleteInBatches(query);
 
-    if (error) throw error
-    results.events = { deleted: count ?? 0 }
-    console.log(`[Cleanup] events: deleted ${count ?? 0} (older than 48h)`)
+    results.events = { deleted: count }
+    console.log(`[Cleanup] events: deleted ${count} (older than 48h)`)
   } catch (e: any) {
     results.events = { error: e.message }
     console.error('[Cleanup] events:', e.message)
@@ -107,36 +121,40 @@ export async function GET(request: NextRequest) {
 
   // ── 2. Event dedup log ─────────────────────────────────────────────────────
   try {
-    const { error, count } = await supabase
-      .from('event_dedup_log')
-      .delete({ count: 'exact' })
-      .lt('created_at', envCutoff)
-
-    if (error && error.message.includes('schema cache')) {
-      results.event_dedup_log = { deleted: 0 } // table not created yet — skip silently
-    } else if (error) {
-      throw error
-    } else {
-      results.event_dedup_log = { deleted: count ?? 0 }
-      console.log(`[Cleanup] event_dedup_log: deleted ${count ?? 0}`)
-    }
+    const query = adminDb.collection('event_dedup_log').where('created_at', '<', envCutoff);
+    const count = await deleteInBatches(query);
+    
+    results.event_dedup_log = { deleted: count }
+    console.log(`[Cleanup] event_dedup_log: deleted ${count}`)
   } catch (e: any) {
     results.event_dedup_log = { error: e.message }
     console.warn('[Cleanup] event_dedup_log:', e.message)
   }
 
   // ── 3. Environmental data cache ────────────────────────────────────────────
-  // Delete zone rows older than 3 days (but keep the cleanup_last_run marker)
+  // Delete zone rows older than 6 hours (but keep the cleanup_last_run marker)
   try {
-    const { error, count } = await supabase
-      .from('env_data_cache')
-      .delete({ count: 'exact' })
-      .lt('fetched_at', envCutoff)
-      .neq('layer_type', 'cleanup_last_run')
+    let deletedCount = 0;
+    while (true) {
+      const snapshot = await adminDb.collection('env_data_cache')
+        .where('fetched_at', '<', envCutoff)
+        .limit(500)
+        .get();
+        
+      if (snapshot.empty) break;
+      
+      const batch = adminDb.batch();
+      snapshot.docs.forEach((doc) => {
+        if (doc.id !== 'cleanup_last_run') {
+          batch.delete(doc.ref);
+          deletedCount++;
+        }
+      });
+      await batch.commit();
+    }
 
-    if (error) throw error
-    results.env_data_cache = { deleted: count ?? 0 }
-    console.log(`[Cleanup] env_data_cache: deleted ${count ?? 0}`)
+    results.env_data_cache = { deleted: deletedCount }
+    console.log(`[Cleanup] env_data_cache: deleted ${deletedCount}`)
   } catch (e: any) {
     results.env_data_cache = { error: e.message }
     console.error('[Cleanup] env_data_cache:', e.message)
@@ -144,14 +162,11 @@ export async function GET(request: NextRequest) {
 
   // ── 4. AQI history ─────────────────────────────────────────────────────────
   try {
-    const { error, count } = await supabase
-      .from('aqi_history')
-      .delete({ count: 'exact' })
-      .lt('recorded_at', envCutoff)
-
-    if (error) throw error
-    results.aqi_history = { deleted: count ?? 0 }
-    console.log(`[Cleanup] aqi_history: deleted ${count ?? 0}`)
+    const query = adminDb.collection('aqi_history').where('recorded_at', '<', envCutoff);
+    const count = await deleteInBatches(query);
+    
+    results.aqi_history = { deleted: count }
+    console.log(`[Cleanup] aqi_history: deleted ${count}`)
   } catch (e: any) {
     results.aqi_history = { error: e.message }
     console.warn('[Cleanup] aqi_history:', e.message)
@@ -161,14 +176,25 @@ export async function GET(request: NextRequest) {
   // Rows are upserted (never deleted), but sparkline arrays become stale.
   // Reset any pair not updated in 6 hours so it refetches fresh data.
   try {
-    const { error, count } = await supabase
-      .from('forex_cache')
-      .update({ sparkline_data: [] })
-      .lt('last_updated', envCutoff)
+    let updatedCount = 0;
+    while (true) {
+      const snapshot = await adminDb.collection('forex_cache')
+        .where('last_updated', '<', envCutoff)
+        .limit(500)
+        .get();
+        
+      if (snapshot.empty) break;
+      
+      const batch = adminDb.batch();
+      snapshot.docs.forEach((doc) => {
+        batch.update(doc.ref, { sparkline_data: [] });
+        updatedCount++;
+      });
+      await batch.commit();
+    }
 
-    if (error) throw error
-    results.forex_cache = { deleted: count ?? 0 }
-    if (count) console.log(`[Cleanup] forex_cache: reset ${count} stale sparklines`)
+    results.forex_cache = { deleted: updatedCount }
+    if (updatedCount) console.log(`[Cleanup] forex_cache: reset ${updatedCount} stale sparklines`)
   } catch (e: any) {
     results.forex_cache = { error: e.message }
     console.warn('[Cleanup] forex_cache:', e.message)
@@ -177,15 +203,14 @@ export async function GET(request: NextRequest) {
   // ── Record this run ────────────────────────────────────────────────────────
   lastRunInMemory = now // always update in-memory
 
-  // Try to persist to DB (requires SQL migration to be run)
-  const { error: markerError } = await supabase.from('env_data_cache').upsert({
-    layer_type: 'cleanup_last_run',
-    data: { eventCutoff, envCutoff, results },
-    fetched_at: now.toISOString(),
-    expires_at: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-  })
-  if (markerError) {
-    console.warn('[Cleanup] Could not persist last_run marker (run SQL migration):', markerError.message)
+  try {
+    await adminDb.collection('env_data_cache').doc('cleanup_last_run').set({
+      data: { eventCutoff, envCutoff, results },
+      fetched_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    }, { merge: true });
+  } catch (markerError: any) {
+    console.warn('[Cleanup] Could not persist last_run marker:', markerError.message)
   }
 
   const totalDeleted = Object.values(results).reduce((sum, r) => sum + (r.deleted ?? 0), 0)

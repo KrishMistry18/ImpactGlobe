@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { adminDb, adminAuth } from '@/lib/firebase/admin'
 
 /**
  * GET /api/events
@@ -14,8 +14,6 @@ export async function GET(request: NextRequest) {
     const country = searchParams.get('country')
     const includeExpired = searchParams.get('include_expired') === 'true'
 
-    const supabase = await createClient()
-
     // Calculate time threshold
     const hoursMap: Record<string, number> = {
       '1h': 1,
@@ -27,36 +25,31 @@ export async function GET(request: NextRequest) {
     const threshold = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()
 
     // Build query
-    let query = supabase
-      .from('events')
-      .select('*')
-      .gte('published_at', threshold)
-      .order('published_at', { ascending: false })
+    let eventsRef: FirebaseFirestore.Query = adminDb.collection('events')
 
-    // Only filter by expiration if not including expired events
-    if (!includeExpired) {
-      query = query.lte('expires_at', new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString())
-    }
+    eventsRef = eventsRef
+      .where('published_at', '>=', threshold)
+      .orderBy('published_at', 'desc')
 
     // Apply filters
     if (category) {
-      query = query.eq('category', category)
+      eventsRef = eventsRef.where('category', '==', category)
     }
     if (impactLevel) {
-      query = query.eq('impact_level', impactLevel)
+      eventsRef = eventsRef.where('impact_level', '==', impactLevel)
     }
     if (country) {
-      query = query.eq('country', country)
+      eventsRef = eventsRef.where('country', '==', country)
     }
 
-    const { data, error } = await query
+    const snapshot = await eventsRef.get()
+    let data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any))
 
-    if (error) {
-      console.error('Failed to fetch events:', error)
-      return NextResponse.json(
-        { error: 'Failed to fetch events' },
-        { status: 500 }
-      )
+    // Firebase queries only support one inequality filter per query, 
+    // so we handle expiration filter in memory if necessary.
+    if (!includeExpired) {
+      const expirationThreshold = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString()
+      data = data.filter(row => row.expires_at <= expirationThreshold)
     }
 
     // Transform database format to app format
@@ -71,7 +64,7 @@ export async function GET(request: NextRequest) {
       summary: row.summary,
       sentiment: row.sentiment,
       forexImpacts: row.forex_impacts || [],
-      confidenceScore: Number(row.confidence_score),
+      confidenceScore: Number(row.confidence_score) * (row.confidence_score <= 1 ? 100 : 1), // Handle 0-1 scale conversion
       isMarketMoving: row.is_market_moving,
       publishedAt: row.published_at,
       expiresAt: row.expires_at,
@@ -99,14 +92,16 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createClient()
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
-    // Check authentication
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
+    const token = authHeader.split('Bearer ')[1]
+    
+    try {
+      await adminAuth.verifyIdToken(token)
+    } catch (e) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -135,36 +130,29 @@ export async function POST(request: NextRequest) {
 
     // Calculate expiration (48 hours from now)
     const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString()
+    const publishedAt = new Date().toISOString()
+
+    const newEvent = {
+      headline: body.headline,
+      country: body.country,
+      lat: body.lat,
+      lon: body.lon,
+      impact_level: body.impactLevel,
+      category: body.category,
+      summary: body.summary,
+      sentiment: body.sentiment,
+      forex_impacts: body.forexImpacts || [],
+      confidence_score: (body.confidenceScore || 0) / 100, // Convert 0-100 to 0-1
+      is_market_moving: body.isMarketMoving || false,
+      published_at: publishedAt,
+      expires_at: expiresAt,
+      source_url: body.sourceUrl || null,
+      created_by: body.createdBy || 'manual',
+    }
 
     // Insert event
-    const { data, error } = await supabase
-      .from('events')
-      .insert({
-        headline: body.headline,
-        country: body.country,
-        lat: body.lat,
-        lon: body.lon,
-        impact_level: body.impactLevel,
-        category: body.category,
-        summary: body.summary,
-        sentiment: body.sentiment,
-        forex_impacts: body.forexImpacts || [],
-        confidence_score: (body.confidenceScore || 0) / 100, // Convert 0-100 to 0-1
-        is_market_moving: body.isMarketMoving || false,
-        expires_at: expiresAt,
-        source_url: body.sourceUrl,
-        created_by: body.createdBy || 'manual',
-      })
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Failed to create event:', error)
-      return NextResponse.json(
-        { error: 'Failed to create event' },
-        { status: 500 }
-      )
-    }
+    const docRef = await adminDb.collection('events').add(newEvent)
+    const data = { id: docRef.id, ...newEvent }
 
     return NextResponse.json(data, { status: 201 })
   } catch (error) {

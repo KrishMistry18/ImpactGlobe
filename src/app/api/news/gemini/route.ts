@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createAdminClient } from '@/lib/supabase/server'
+import { adminDb } from '@/lib/firebase/admin'
 
 // ── Seed events — used when all AI providers are unavailable ─────────────────
 const SEED_EVENTS = [
@@ -52,6 +52,15 @@ const RETRY_GAP_MS   = 2 * 60 * 1000
 const REFRESH_GAP_MS = 4 * 60 * 60 * 1000
 const TARGET_EVENTS  = 20
 
+async function deleteAiAutoEvents() {
+  const snapshot = await adminDb.collection('events').where('created_by', '==', 'ai-auto').get()
+  const batch = adminDb.batch()
+  snapshot.docs.forEach(doc => batch.delete(doc.ref))
+  if (snapshot.size > 0) {
+    await batch.commit()
+  }
+}
+
 export async function GET(request: NextRequest) {
   const cronSecret  = request.headers.get('x-cron-secret')
   const adminSecret = request.headers.get('x-admin-secret')
@@ -62,18 +71,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const supabase = createAdminClient()
   const nowMs    = Date.now()
   const now      = new Date(nowMs)
 
   // ── Guard 1: 4-hour success cadence ──────────────────────────────────────
   if (!isForced && lastSuccessMs > 0 && nowMs - lastSuccessMs < REFRESH_GAP_MS) {
-    const { count } = await supabase
-      .from('events')
-      .select('id', { count: 'exact', head: true })
-      .gte('expires_at', now.toISOString())
+    const snapshot = await adminDb.collection('events')
+      .where('expires_at', '>=', now.toISOString())
+      .count()
+      .get()
+      
+    const count = snapshot.data().count
 
-    if ((count ?? 0) >= TARGET_EVENTS) {
+    if (count >= TARGET_EVENTS) {
       const nextIn = Math.round((REFRESH_GAP_MS - (nowMs - lastSuccessMs)) / 60_000)
       return NextResponse.json({ success: true, skipped: true, message: `${count} events live. Next refresh in ~${nextIn}min` })
     }
@@ -150,7 +160,8 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
   // ── 2. Try Gemini (fallback) ───────────────────────────────────────────────
   const geminiKey = process.env.GEMINI_API_KEY
   if (!responseText && geminiKey) {
-    const geminiModels = ['gemini-2.0-flash-lite', 'gemini-2.0-flash']
+    // gemini-2.0-flash-lite might be invalid or require preview suffix. Using stable models.
+    const geminiModels = ['gemini-2.0-flash', 'gemini-1.5-flash']
     for (const model of geminiModels) {
       try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`
@@ -158,9 +169,13 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.4, maxOutputTokens: 4096 } }),
-          signal: AbortSignal.timeout(25_000),
+          signal: AbortSignal.timeout(60_000), // Increased from 25s to 60s to allow time for 20 complex JSON objects
         })
-        if (!res.ok) { console.warn(`[Gemini] ${model} HTTP ${res.status}`); continue }
+        if (!res.ok) {
+          const errText = await res.text()
+          console.warn(`[Gemini] ${model} HTTP ${res.status}: ${errText.slice(0, 100)}`)
+          continue
+        }
         const data = await res.json()
         responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
         if (responseText) { modelUsed = `gemini:${model}`; console.log(`[Gemini] ✅ ${model} (${responseText.length} chars)`); break }
@@ -172,7 +187,7 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
   if (!responseText) {
     failureStreak++
     console.warn(`[News] All AI providers failed (streak: ${failureStreak}). Inserting seed events.`)
-    await supabase.from('events').delete().eq('created_by', 'ai-auto')
+    await deleteAiAutoEvents()
     const seedRows = SEED_EVENTS.map(e => ({
       headline: e.headline, country: e.country, lat: e.lat, lon: e.lon,
       impact_level: e.impactLevel, category: e.category, summary: e.summary,
@@ -182,10 +197,17 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
       published_at: now.toISOString(),
       expires_at:   new Date(nowMs + 48 * 3_600_000).toISOString(),
       source_url: null, created_by: 'ai-auto' as const,
+      created_at: now.toISOString()
     }))
-    const { data: seeded } = await supabase.from('events').insert(seedRows).select('id')
-    console.log(`[News] 🌱 Seeded ${seeded?.length ?? 0} fallback events`)
-    return NextResponse.json({ success: true, seeded: seeded?.length ?? 0, failureStreak, retryInSec: Math.round(RETRY_GAP_MS / 1000) })
+    
+    const batch = adminDb.batch()
+    seedRows.forEach(row => {
+      batch.set(adminDb.collection('events').doc(), row)
+    })
+    await batch.commit()
+    
+    console.log(`[News] 🌱 Seeded ${seedRows.length} fallback events`)
+    return NextResponse.json({ success: true, seeded: seedRows.length, failureStreak, retryInSec: Math.round(RETRY_GAP_MS / 1000) })
   }
 
   // ── Parse JSON ────────────────────────────────────────────────────────────
@@ -219,7 +241,7 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
   }
 
   // ── Replace DB events ─────────────────────────────────────────────────────
-  await supabase.from('events').delete().eq('created_by', 'ai-auto')
+  await deleteAiAutoEvents()
   const rows = validated.map(e => ({
     headline: String(e.headline).slice(0, 100), country: String(e.country).slice(0, 100),
     lat: Number(e.lat), lon: Number(e.lon), impact_level: e.impactLevel,
@@ -230,18 +252,30 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
     is_market_moving: e.impactLevel === 'Critical' || e.impactLevel === 'High',
     published_at: now.toISOString(), expires_at: new Date(nowMs + 48 * 3_600_000).toISOString(),
     source_url: null, created_by: 'ai-auto' as const,
+    created_at: now.toISOString()
   }))
 
-  const { data: inserted, error: insertErr } = await supabase.from('events').insert(rows).select('id, headline, impact_level, country, lat, lon')
-  if (insertErr) { failureStreak++; return NextResponse.json({ error: insertErr.message }, { status: 500 }) }
+  try {
+    const batch = adminDb.batch()
+    const inserted: any[] = []
+    rows.forEach(row => {
+      const ref = adminDb.collection('events').doc()
+      batch.set(ref, row)
+      inserted.push({ id: ref.id, headline: row.headline, impact_level: row.impact_level, country: row.country, lat: row.lat, lon: row.lon })
+    })
+    await batch.commit()
 
-  lastSuccessMs = Date.now()
-  failureStreak = 0
-  console.log(`[News] ✅ Inserted ${inserted?.length ?? 0} AI events via ${modelUsed}. Next refresh in 4h.`)
+    lastSuccessMs = Date.now()
+    failureStreak = 0
+    console.log(`[News] ✅ Inserted ${inserted.length} AI events via ${modelUsed}. Next refresh in 4h.`)
 
-  return NextResponse.json({
-    success: true, model: modelUsed, created: inserted?.length ?? 0, nextRefreshIn: '4 hours',
-    tiers: { Critical: buckets.Critical.length, High: buckets.High.length, Medium: buckets.Medium.length, Low: buckets.Low.length },
-    events: inserted?.map((e: any) => ({ id: e.id, headline: e.headline, impactLevel: e.impact_level, country: e.country, lat: e.lat, lon: e.lon })),
-  })
+    return NextResponse.json({
+      success: true, model: modelUsed, created: inserted.length, nextRefreshIn: '4 hours',
+      tiers: { Critical: buckets.Critical.length, High: buckets.High.length, Medium: buckets.Medium.length, Low: buckets.Low.length },
+      events: inserted,
+    })
+  } catch (insertErr: any) {
+    failureStreak++
+    return NextResponse.json({ error: insertErr.message }, { status: 500 })
+  }
 }

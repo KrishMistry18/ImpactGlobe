@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
-import { createAdminClient } from '@/lib/supabase/server'
+import { adminDb } from '@/lib/firebase/admin'
 import { getWindGridForZone, getTempAnomaliesForZone } from '@/lib/env/openmeteo'
 import { getWindGridForZoneWeatherAPI, getTempAnomaliesForZoneWeatherAPI } from '@/lib/env/weatherapi'
 import { getZoneForType, getCurrentZoneForType, GLOBE_ZONES } from '@/lib/env/zones'
 import type { EnvLayerData, WindPoint, TempAnomalyPoint } from '@/store/types'
+import { FieldPath } from 'firebase-admin/firestore'
 
 /**
  * GET /api/env/weather
@@ -16,18 +17,22 @@ import type { EnvLayerData, WindPoint, TempAnomalyPoint } from '@/store/types'
  */
 export async function GET() {
   try {
-    const supabase = createAdminClient()
     const now = new Date()
     const sixHoursAgo = new Date(now.getTime() - 21_600_000)
 
-    // ── Wind ──────────────────────────────────────────────────────────────
-    const { data: allWindZones } = await supabase
-      .from('env_data_cache').select('*').like('layer_type', 'wind_zone_%')
+    const windZoneIds = GLOBE_ZONES.map(z => `wind_zone_${z.id}`)
+    const tempZoneIds = GLOBE_ZONES.map(z => `temp_zone_${z.id}`)
 
-    const windCacheEmpty = !allWindZones || allWindZones.length === 0
+    // ── Wind ──────────────────────────────────────────────────────────────
+    const windSnapshot = await adminDb.collection('env_data_cache')
+      .where(FieldPath.documentId(), 'in', windZoneIds)
+      .get()
+
+    const allWindZones = windSnapshot.docs.map(doc => ({ layer_type: doc.id, ...doc.data() } as any))
+    const windCacheEmpty = allWindZones.length === 0
 
     if (windCacheEmpty) {
-      console.log('[Weather] Wind cache empty — fetching all 4 zones...')
+      console.log('[Weather] Wind cache empty — fetching all zones...')
       for (const zone of GLOBE_ZONES) {
         const key = `wind_zone_${zone.id}`
         let points: WindPoint[] = []
@@ -37,12 +42,11 @@ export async function GET() {
           try { points = await getWindGridForZoneWeatherAPI(zone) } catch { /* skip */ }
         }
         if (points.length > 0) {
-          await supabase.from('env_data_cache').upsert({
-            layer_type: key,
+          await adminDb.collection('env_data_cache').doc(key).set({
             data: { points, zone: zone.id },
             fetched_at: now.toISOString(),
             expires_at: new Date(now.getTime() + 172_800_000).toISOString(),
-          })
+          }, { merge: true })
           console.log(`[Weather] Cached ${points.length} wind pts for ${zone.name}`)
         }
       }
@@ -50,32 +54,33 @@ export async function GET() {
       // Staggered refresh — one zone per scheduled minute
       const windZone = getZoneForType('wind') ?? getCurrentZoneForType('wind')
       const windKey = `wind_zone_${windZone.id}`
-      const cached = allWindZones?.find((c: any) => c.layer_type === windKey)
+      const cached = allWindZones.find((c: any) => c.layer_type === windKey)
       if (!cached || new Date(cached.fetched_at) < sixHoursAgo) {
         let points: WindPoint[] = []
         try { points = await getWindGridForZone(windZone) } catch {
           try { points = await getWindGridForZoneWeatherAPI(windZone) } catch { /* skip */ }
         }
         if (points.length > 0) {
-          await supabase.from('env_data_cache').upsert({
-            layer_type: windKey,
+          await adminDb.collection('env_data_cache').doc(windKey).set({
             data: { points, zone: windZone.id },
             fetched_at: now.toISOString(),
             expires_at: new Date(now.getTime() + 172_800_000).toISOString(),
-          })
+          }, { merge: true })
           console.log(`[Weather] Refreshed ${points.length} wind pts for ${windZone.name}`)
         }
       }
     }
 
     // ── Temperature ───────────────────────────────────────────────────────
-    const { data: allTempZones } = await supabase
-      .from('env_data_cache').select('*').like('layer_type', 'temp_zone_%')
+    const tempSnapshot = await adminDb.collection('env_data_cache')
+      .where(FieldPath.documentId(), 'in', tempZoneIds)
+      .get()
 
-    const tempCacheEmpty = !allTempZones || allTempZones.length === 0
+    const allTempZones = tempSnapshot.docs.map(doc => ({ layer_type: doc.id, ...doc.data() } as any))
+    const tempCacheEmpty = allTempZones.length === 0
 
     if (tempCacheEmpty) {
-      console.log('[Weather] Temp cache empty — fetching all 4 zones...')
+      console.log('[Weather] Temp cache empty — fetching all zones...')
       for (const zone of GLOBE_ZONES) {
         const key = `temp_zone_${zone.id}`
         let points: TempAnomalyPoint[] = []
@@ -85,56 +90,59 @@ export async function GET() {
           try { points = await getTempAnomaliesForZoneWeatherAPI(zone) } catch { /* skip */ }
         }
         if (points.length > 0) {
-          await supabase.from('env_data_cache').upsert({
-            layer_type: key,
+          await adminDb.collection('env_data_cache').doc(key).set({
             data: { points, zone: zone.id },
             fetched_at: now.toISOString(),
             expires_at: new Date(now.getTime() + 172_800_000).toISOString(),
-          })
+          }, { merge: true })
           console.log(`[Weather] Cached ${points.length} temp pts for ${zone.name}`)
         }
       }
     } else {
       const tempZone = getZoneForType('temp') ?? getCurrentZoneForType('temp')
       const tempKey = `temp_zone_${tempZone.id}`
-      const cached = allTempZones?.find((c: any) => c.layer_type === tempKey)
+      const cached = allTempZones.find((c: any) => c.layer_type === tempKey)
       if (!cached || new Date(cached.fetched_at) < sixHoursAgo) {
         let points: TempAnomalyPoint[] = []
         try { points = await getTempAnomaliesForZone(tempZone) } catch {
           try { points = await getTempAnomaliesForZoneWeatherAPI(tempZone) } catch { /* skip */ }
         }
         if (points.length > 0) {
-          await supabase.from('env_data_cache').upsert({
-            layer_type: tempKey,
+          await adminDb.collection('env_data_cache').doc(tempKey).set({
             data: { points, zone: tempZone.id },
             fetched_at: now.toISOString(),
             expires_at: new Date(now.getTime() + 172_800_000).toISOString(),
-          })
+          }, { merge: true })
           console.log(`[Weather] Refreshed ${points.length} temp pts for ${tempZone.name}`)
         }
       }
     }
 
     // ── Merge all cached zones ─────────────────────────────────────────────
-    const { data: freshWindZones } = await supabase
-      .from('env_data_cache').select('*').like('layer_type', 'wind_zone_%')
-    const { data: freshTempZones } = await supabase
-      .from('env_data_cache').select('*').like('layer_type', 'temp_zone_%')
+    const freshWindSnapshot = await adminDb.collection('env_data_cache')
+      .where(FieldPath.documentId(), 'in', windZoneIds)
+      .get()
+    const freshWindZones = freshWindSnapshot.docs.map(doc => doc.data())
+    
+    const freshTempSnapshot = await adminDb.collection('env_data_cache')
+      .where(FieldPath.documentId(), 'in', tempZoneIds)
+      .get()
+    const freshTempZones = freshTempSnapshot.docs.map(doc => doc.data())
 
     const allWindPoints: WindPoint[] = []
-    freshWindZones?.forEach((z: any) => {
+    freshWindZones.forEach((z: any) => {
       const d = z.data as { points: WindPoint[] }
       if (d?.points) allWindPoints.push(...d.points)
     })
 
     const allTempPoints: TempAnomalyPoint[] = []
-    freshTempZones?.forEach((z: any) => {
+    freshTempZones.forEach((z: any) => {
       const d = z.data as { points: TempAnomalyPoint[] }
       if (d?.points) allTempPoints.push(...d.points)
     })
 
-    const windCoverage = Math.round((freshWindZones?.length ?? 0) / GLOBE_ZONES.length * 100)
-    const tempCoverage = Math.round((freshTempZones?.length ?? 0) / GLOBE_ZONES.length * 100)
+    const windCoverage = Math.round((freshWindZones.length) / GLOBE_ZONES.length * 100)
+    const tempCoverage = Math.round((freshTempZones.length) / GLOBE_ZONES.length * 100)
 
     console.log(`[Weather] Returning ${allWindPoints.length} wind (${windCoverage}%), ${allTempPoints.length} temp (${tempCoverage}%)`)
 
@@ -142,7 +150,7 @@ export async function GET() {
       {
         wind: { type: 'wind', updatedAt: now.toISOString(), wind: allWindPoints } as EnvLayerData,
         temperature_anomaly: { type: 'temperature_anomaly', updatedAt: now.toISOString(), tempAnomalies: allTempPoints } as EnvLayerData,
-        meta: { windCoverage: `${windCoverage}%`, tempCoverage: `${tempCoverage}%`, zonesLoaded: { wind: freshWindZones?.length ?? 0, temp: freshTempZones?.length ?? 0, total: GLOBE_ZONES.length } },
+        meta: { windCoverage: `${windCoverage}%`, tempCoverage: `${tempCoverage}%`, zonesLoaded: { wind: freshWindZones.length, temp: freshTempZones.length, total: GLOBE_ZONES.length } },
       },
       { headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' } }
     )

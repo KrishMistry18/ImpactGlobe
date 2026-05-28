@@ -1,5 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { adminDb } from "@/lib/firebase/admin";
+import { FieldPath } from "firebase-admin/firestore";
+
+async function clearCache(type: string) {
+  let query: FirebaseFirestore.Query = adminDb.collection("env_data_cache");
+  if (type !== "all") {
+    query = query
+      .where(FieldPath.documentId(), ">=", type)
+      .where(FieldPath.documentId(), "<", type + "\uf8ff");
+  }
+
+  const snapshot = await query.get();
+  const batch = adminDb.batch();
+  let count = 0;
+
+  snapshot.docs.forEach((doc) => {
+    batch.delete(doc.ref);
+    count++;
+  });
+
+  if (count > 0) {
+    await batch.commit();
+  }
+  return count;
+}
 
 /**
  * GET /api/env/clear-cache?type=temp  (dev only — no auth required)
@@ -10,17 +34,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Dev only" }, { status: 403 });
   }
   const type = request.nextUrl.searchParams.get("type") || "all";
-  const supabase = createAdminClient();
-  let query = supabase.from("env_data_cache").delete();
-  if (type === "all") {
-    query = query.neq("layer_type", "KEEP_NOTHING");
-  } else {
-    query = query.like("layer_type", `${type}%`);
-  }
-  const { error, count } = await query;
-  if (error)
+  
+  try {
+    const count = await clearCache(type);
+    return NextResponse.json({ success: true, deleted: count, type });
+  } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true, deleted: count, type });
+  }
 }
 
 /**
@@ -35,21 +55,11 @@ export async function DELETE(request: NextRequest) {
   }
 
   const type = request.nextUrl.searchParams.get("type") || "all";
-  const supabase = createAdminClient();
-
-  let query = supabase.from("env_data_cache").delete();
-
-  if (type === "all") {
-    query = query.neq("layer_type", "KEEP_NOTHING"); // delete all
-  } else {
-    query = query.like("layer_type", `${type}%`);
-  }
-
-  const { error, count } = await query;
-
-  if (error) {
+  
+  try {
+    const count = await clearCache(type);
+    return NextResponse.json({ success: true, deleted: count, type });
+  } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
-  return NextResponse.json({ success: true, deleted: count, type });
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createAdminClient } from '@/lib/supabase/server'
+import { adminDb } from '@/lib/firebase/admin'
 import { parseMultipleFeeds, filterNewItems, deduplicateItems } from '@/lib/rss/parser'
 import { DEFAULT_RSS_SOURCES } from '@/lib/rss/sources'
 import { analyzeWithGemini } from '@/lib/gemini/client'
@@ -23,19 +23,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const supabase = createAdminClient()
     const now = new Date()
 
     // ── 1-hour cache guard — skip Gemini if we already have recent events ──
     const oneHourAgo = new Date(now.getTime() - 1 * 60 * 60 * 1000).toISOString()
-    const { data: recent, count } = await supabase
-      .from('events')
-      .select('id, created_at', { count: 'exact' })
-      .gte('created_at', oneHourAgo)
+    const recentSnapshot = await adminDb.collection('events')
+      .where('created_at', '>=', oneHourAgo)
       .limit(1)
+      .get()
 
-    if (count && count > 0 && recent?.[0]) {
-      const ageMin = Math.round((now.getTime() - new Date(recent[0].created_at).getTime()) / 60_000)
+    if (!recentSnapshot.empty) {
+      const recentDoc = recentSnapshot.docs[0].data()
+      const ageMin = Math.round((now.getTime() - new Date(recentDoc.created_at).getTime()) / 60_000)
       console.log(`[RSS Poll] Skipping — events created ${ageMin}min ago (1h cache active)`)
       return NextResponse.json({
         success: true,
@@ -45,17 +44,16 @@ export async function GET(request: NextRequest) {
     }
 
     // ── Fetch RSS feeds ────────────────────────────────────────────────────
-    const { data: dbSources } = await supabase
-      .from('rss_sources')
-      .select('*')
-      .eq('is_active', true)
+    const sourcesSnapshot = await adminDb.collection('rss_sources')
+      .where('is_active', '==', true)
+      .get()
 
-    const sources = dbSources?.length
-      ? dbSources.map((s: any) => ({ name: s.name, url: s.url }))
+    const sources = !sourcesSnapshot.empty
+      ? sourcesSnapshot.docs.map(doc => ({ name: doc.data().name, url: doc.data().url }))
       : DEFAULT_RSS_SOURCES
 
     console.log(`[RSS Poll] Polling ${sources.length} sources...`)
-    const feeds = await parseMultipleFeeds(sources.map((s: { url: string }) => s.url))
+    const feeds = await parseMultipleFeeds(sources.map(s => s.url))
     console.log(`[RSS Poll] Parsed ${feeds.length} feeds`)
 
     let allItems = feeds.flatMap((f) => f.items)
@@ -138,12 +136,11 @@ Return [] if no significant events. No markdown, no extra text.`
     }
 
     // ── Deduplicate against last 48h (matches event retention window) ──────
-    const { data: existing } = await supabase
-      .from('events')
-      .select('headline')
-      .gte('published_at', new Date(now.getTime() - 48 * 60 * 60 * 1000).toISOString())
+    const existingEventsSnapshot = await adminDb.collection('events')
+      .where('published_at', '>=', new Date(now.getTime() - 48 * 60 * 60 * 1000).toISOString())
+      .get()
 
-    const existingSet = new Set((existing || []).map((e: any) => e.headline.toLowerCase().slice(0, 50)))
+    const existingSet = new Set(existingEventsSnapshot.docs.map((doc) => doc.data().headline?.toLowerCase().slice(0, 50)))
     const unique = events.filter((e) => !existingSet.has((e.headline || '').toLowerCase().slice(0, 50)))
 
     if (unique.length === 0) {
@@ -166,25 +163,32 @@ Return [] if no significant events. No markdown, no extra text.`
       published_at: now.toISOString(),
       expires_at: new Date(now.getTime() + 48 * 60 * 60 * 1000).toISOString(),
       created_by: 'ai-auto' as const,
+      created_at: now.toISOString()
     }))
 
-    const { data: inserted, error: insertErr } = await supabase
-      .from('events')
-      .insert(rows)
-      .select()
+    try {
+      const batch = adminDb.batch()
+      const inserted: any[] = []
+      
+      rows.forEach((row) => {
+        const ref = adminDb.collection('events').doc()
+        batch.set(ref, row)
+        inserted.push({ id: ref.id, headline: row.headline, impactLevel: row.impact_level })
+      })
+      
+      await batch.commit()
 
-    if (insertErr) {
+      console.log(`[RSS Poll] ✅ Created ${inserted.length} events`)
+      return NextResponse.json({
+        success: true,
+        message: `Created ${inserted.length} events`,
+        stats: { feeds: feeds.length, items: items.length, created: inserted.length },
+        events: inserted,
+      })
+    } catch (insertErr: any) {
       console.error('[RSS Poll] Insert error:', insertErr)
       return NextResponse.json({ error: 'Failed to save events', details: insertErr.message }, { status: 500 })
     }
-
-    console.log(`[RSS Poll] ✅ Created ${inserted?.length ?? 0} events`)
-    return NextResponse.json({
-      success: true,
-      message: `Created ${inserted?.length ?? 0} events`,
-      stats: { feeds: feeds.length, items: items.length, created: inserted?.length ?? 0 },
-      events: inserted?.map((e: any) => ({ id: e.id, headline: e.headline, impactLevel: e.impact_level })),
-    })
   } catch (error) {
     console.error('[RSS Poll] Fatal error:', error)
     return NextResponse.json({ error: 'RSS poll failed', details: error instanceof Error ? error.message : 'Unknown' }, { status: 500 })

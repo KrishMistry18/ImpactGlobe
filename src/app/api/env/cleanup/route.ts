@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createAdminClient } from '@/lib/supabase/server'
+import { adminDb } from '@/lib/firebase/admin'
 
 /**
  * GET /api/env/cleanup
@@ -14,27 +14,33 @@ export async function GET(request: Request) {
   }
 
   try {
-    const supabase = createAdminClient()
-    const twoDaysAgo = new Date(Date.now() - 172800_000) // 48 hours
+    const twoDaysAgo = new Date(Date.now() - 172800_000).toISOString() // 48 hours
 
     // Delete zone data older than 48 hours
-    const { data, error } = await supabase
-      .from('env_data_cache')
-      .delete()
-      .or('layer_type.like.wind_zone_%,layer_type.like.temp_zone_%,layer_type.like.aqi_zone_%')
-      .lt('fetched_at', twoDaysAgo.toISOString())
+    const snapshot = await adminDb.collection('env_data_cache')
+      .where('fetched_at', '<', twoDaysAgo)
+      .get()
+      
+    const batch = adminDb.batch()
+    let count = 0
+    snapshot.docs.forEach(doc => {
+      if (doc.id.startsWith('wind_zone_') || doc.id.startsWith('temp_zone_') || doc.id.startsWith('aqi_zone_')) {
+        batch.delete(doc.ref)
+        count++
+      }
+    })
 
-    if (error) {
-      console.error('[Cleanup] Error deleting old data:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    if (count > 0) {
+      await batch.commit()
     }
 
-    console.log(`[Cleanup] Deleted environmental data older than 48 hours`)
+    console.log(`[Cleanup] Deleted ${count} environmental data entries older than 48 hours`)
 
     return NextResponse.json({
       success: true,
       message: 'Cleaned up old environmental data',
-      deletedBefore: twoDaysAgo.toISOString(),
+      deletedBefore: twoDaysAgo,
+      count
     })
   } catch (error) {
     console.error('[Cleanup] Error:', error)

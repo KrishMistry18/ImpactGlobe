@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
-import { createAdminClient } from '@/lib/supabase/server'
+import { adminDb } from '@/lib/firebase/admin'
 import { getSeaTempForZone } from '@/lib/env/seatemp'
 import { getZoneForType, getCurrentZoneForType, GLOBE_ZONES } from '@/lib/env/zones'
 import type { EnvLayerData, SeaTempPoint } from '@/store/types'
+import { FieldPath } from 'firebase-admin/firestore'
 
 /**
  * GET /api/env/sea-temp
@@ -18,28 +19,30 @@ import type { EnvLayerData, SeaTempPoint } from '@/store/types'
  */
 export async function GET() {
   try {
-    const supabase = createAdminClient()
     const now = new Date()
     const sixHoursAgo = new Date(now.getTime() - 21_600_000)
 
-    const { data: allCachedZones } = await supabase
-      .from('env_data_cache').select('*').like('layer_type', 'sea_zone_%')
+    const zoneIds = GLOBE_ZONES.map(z => `sea_zone_${z.id}`)
 
-    const cacheIsEmpty = !allCachedZones || allCachedZones.length === 0
+    const snapshot = await adminDb.collection('env_data_cache')
+      .where(FieldPath.documentId(), 'in', zoneIds)
+      .get()
+
+    const allCachedZones = snapshot.docs.map(doc => ({ layer_type: doc.id, ...doc.data() } as any))
+    const cacheIsEmpty = allCachedZones.length === 0
 
     if (cacheIsEmpty) {
-      console.log('[SeaTemp] Cache empty — fetching all 4 zones...')
+      console.log('[SeaTemp] Cache empty — fetching all zones...')
       for (const zone of GLOBE_ZONES) {
         const key = `sea_zone_${zone.id}`
         try {
           const points = await getSeaTempForZone(zone)
           if (points.length > 0) {
-            await supabase.from('env_data_cache').upsert({
-              layer_type: key,
+            await adminDb.collection('env_data_cache').doc(key).set({
               data: { points, zone: zone.id },
               fetched_at: now.toISOString(),
               expires_at: new Date(now.getTime() + 172_800_000).toISOString(),
-            })
+            }, { merge: true })
             console.log(`[SeaTemp] Cached ${points.length} pts for ${zone.name}`)
           }
         } catch (err) {
@@ -49,17 +52,16 @@ export async function GET() {
     } else {
       const seaZone = getZoneForType('sea_temp') ?? getCurrentZoneForType('sea_temp')
       const seaKey = `sea_zone_${seaZone.id}`
-      const zoneCache = allCachedZones?.find((c: any) => c.layer_type === seaKey)
+      const zoneCache = allCachedZones.find((c: any) => c.layer_type === seaKey)
       if (!zoneCache || new Date(zoneCache.fetched_at) < sixHoursAgo) {
         try {
           const points = await getSeaTempForZone(seaZone)
           if (points.length > 0) {
-            await supabase.from('env_data_cache').upsert({
-              layer_type: seaKey,
+            await adminDb.collection('env_data_cache').doc(seaKey).set({
               data: { points, zone: seaZone.id },
               fetched_at: now.toISOString(),
               expires_at: new Date(now.getTime() + 172_800_000).toISOString(),
-            })
+            }, { merge: true })
             console.log(`[SeaTemp] Refreshed ${points.length} pts for ${seaZone.name}`)
           }
         } catch (err) {
@@ -69,16 +71,19 @@ export async function GET() {
     }
 
     // Merge all cached zones
-    const { data: freshZones } = await supabase
-      .from('env_data_cache').select('*').like('layer_type', 'sea_zone_%')
+    const freshSnapshot = await adminDb.collection('env_data_cache')
+      .where(FieldPath.documentId(), 'in', zoneIds)
+      .get()
+      
+    const freshZones = freshSnapshot.docs.map(doc => doc.data())
 
     const allSeaPoints: SeaTempPoint[] = []
-    freshZones?.forEach((z: any) => {
+    freshZones.forEach((z: any) => {
       const d = z.data as { points: SeaTempPoint[] }
       if (d?.points) allSeaPoints.push(...d.points)
     })
 
-    const coverage = Math.round((freshZones?.length ?? 0) / GLOBE_ZONES.length * 100)
+    const coverage = Math.round((freshZones.length) / GLOBE_ZONES.length * 100)
     console.log(`[SeaTemp] Returning ${allSeaPoints.length} pts (${coverage}% coverage)`)
 
     const seaData: EnvLayerData = {
@@ -88,7 +93,7 @@ export async function GET() {
     }
 
     return NextResponse.json(
-      { ...seaData, meta: { coverage: `${coverage}%`, zonesLoaded: freshZones?.length ?? 0, totalZones: GLOBE_ZONES.length } },
+      { ...seaData, meta: { coverage: `${coverage}%`, zonesLoaded: freshZones.length, totalZones: GLOBE_ZONES.length } },
       { headers: { 'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=7200' } }
     )
   } catch (error) {

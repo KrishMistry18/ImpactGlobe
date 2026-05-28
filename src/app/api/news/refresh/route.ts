@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createAdminClient } from '@/lib/supabase/server'
+import { adminDb } from '@/lib/firebase/admin'
 import { fetchNewsDataEvents } from '@/lib/news/newsdata'
 
 /**
@@ -13,16 +13,17 @@ import { fetchNewsDataEvents } from '@/lib/news/newsdata'
  * events in the last 55 minutes (respects 200 req/day limit).
  */
 export async function GET(request: NextRequest) {
-  const supabase = createAdminClient()
   const now = new Date()
   const oneHourAgo = new Date(now.getTime() - 55 * 60 * 1000).toISOString()
 
   // ── 1h cache guard ────────────────────────────────────────────────────────
-  const { count: recentCount } = await supabase
-    .from('events')
-    .select('id', { count: 'exact', head: true })
-    .eq('created_by', 'ai-auto')
-    .gte('created_at', oneHourAgo)
+  const snapshot = await adminDb.collection('events')
+    .where('created_by', '==', 'ai-auto')
+    .where('created_at', '>=', oneHourAgo)
+    .count()
+    .get()
+    
+  const recentCount = snapshot.data().count
 
   if (recentCount && recentCount > 0) {
     console.log(`[News Refresh] Skipping — ${recentCount} events inserted in last 55 min`)
@@ -48,16 +49,18 @@ export async function GET(request: NextRequest) {
 
   // ── Dedup: skip articles already in DB (check last 48h by source_url/headline) ──
   const twoDaysAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000).toISOString()
-  const { data: existingEvents } = await supabase
-    .from('events')
-    .select('source_url, headline')
-    .gte('created_at', twoDaysAgo)
+  
+  const existingSnapshot = await adminDb.collection('events')
+    .where('created_at', '>=', twoDaysAgo)
+    .get()
+
+  const existingEvents = existingSnapshot.docs.map(doc => doc.data())
 
   const existingUrls = new Set(
     existingEvents?.map((e: any) => e.source_url).filter(Boolean) ?? []
   )
   const existingHeadlines = new Set(
-    existingEvents?.map((e: any) => e.headline.toLowerCase().slice(0, 50)) ?? []
+    existingEvents?.map((e: any) => e.headline?.toLowerCase().slice(0, 50)) ?? []
   )
 
   const toInsert = newEvents.filter((e) => {
@@ -97,28 +100,35 @@ export async function GET(request: NextRequest) {
     expires_at: e.expiresAt,
     source_url: e.sourceUrl || null,
     created_by: 'ai-auto' as const,
+    created_at: now.toISOString()
   }))
 
-  const { data: inserted, error: insertErr } = await supabase
-    .from('events')
-    .insert(rows)
-    .select('id, headline, impact_level')
+  try {
+    const batch = adminDb.batch()
+    const inserted: any[] = []
+    
+    rows.forEach((row) => {
+      const ref = adminDb.collection('events').doc()
+      batch.set(ref, row)
+      inserted.push({
+        id: ref.id,
+        headline: row.headline,
+        impactLevel: row.impact_level,
+      })
+    })
+    
+    await batch.commit()
+    
+    console.log(`[News Refresh] ✅ Inserted ${inserted.length} fresh events`)
 
-  if (insertErr) {
+    return NextResponse.json({
+      success: true,
+      message: `Inserted ${inserted.length} fresh events`,
+      created: inserted.length,
+      events: inserted,
+    })
+  } catch (insertErr: any) {
     console.error('[News Refresh] Insert error:', insertErr)
     return NextResponse.json({ error: insertErr.message }, { status: 500 })
   }
-
-  console.log(`[News Refresh] ✅ Inserted ${inserted?.length ?? 0} fresh events`)
-
-  return NextResponse.json({
-    success: true,
-    message: `Inserted ${inserted?.length ?? 0} fresh events`,
-    created: inserted?.length ?? 0,
-    events: inserted?.map((e: any) => ({
-      id: e.id,
-      headline: e.headline,
-      impactLevel: e.impact_level,
-    })),
-  })
 }
