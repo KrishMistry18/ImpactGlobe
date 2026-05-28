@@ -2,8 +2,6 @@
 
 A real-time geopolitical and financial intelligence dashboard built on a 3D interactive globe. ImpactGlobe monitors world events, environmental data, and forex market impacts - all in one place.
 
-![ImpactGlobe](https://raw.githubusercontent.com/KrishMistry18/ImpactGlobe/main/public/globe.svg)
-
 ## Features
 
 - **3D Globe & 2D Map** - Switch between an interactive Three.js globe and a Leaflet map. Events appear as animated ripple markers scaled by impact level.
