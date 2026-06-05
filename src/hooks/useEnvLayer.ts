@@ -5,11 +5,20 @@ import useSWR, { preload } from 'swr'
 import { useGlobeStore } from '@/store/useGlobeStore'
 import type { EnvLayerType, EnvLayerData } from '@/store/types'
 
-const fetcher = (url: string) =>
-  fetch(url).then((r) => {
-    if (!r.ok) throw new Error(`HTTP ${r.status}`)
-    return r.json()
-  })
+const fetcher = async (url: string) => {
+  const r = await fetch(url)
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`
+    try {
+      const data = await r.json()
+      if (data.error) msg += `: ${data.error}`
+      if (data.message) msg += ` - ${data.message}`
+      if (data.stack) msg += `\nStack: ${data.stack}`
+    } catch {}
+    throw new Error(msg)
+  }
+  return r.json()
+}
 
 /** Map layer type to API path */
 function layerTypeToPath(type: EnvLayerType): string {

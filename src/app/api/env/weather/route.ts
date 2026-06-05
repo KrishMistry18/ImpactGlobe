@@ -154,8 +154,8 @@ export async function GET() {
       },
       { headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' } }
     )
-  } catch (error) {
+  } catch (error: any) {
     console.error('[Weather] Error:', error)
-    return NextResponse.json({ error: 'Failed to fetch weather data' }, { status: 500 })
+    return NextResponse.json({ error: 'Failed to fetch weather data', message: error.message, stack: error.stack }, { status: 500 })
   }
 }
