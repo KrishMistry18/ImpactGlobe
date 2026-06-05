@@ -66,12 +66,9 @@ const STAR_RADIUS = 300;
 const AUTO_ROTATE_RESUME_MS = 4000;
 const SUN_UPDATE_INTERVAL_MS = 60_000;
 
-const EARTH_DAY_URL =
-  "https://unpkg.com/three-globe/example/img/earth-day.jpg";
-const EARTH_NIGHT_URL =
-  "https://unpkg.com/three-globe/example/img/earth-night.jpg";
-const COUNTRY_BORDERS_URL =
-  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson";
+const EARTH_DAY_URL = "/assets/earth-day.jpg";
+const EARTH_NIGHT_URL = "/assets/earth-night.jpg";
+const COUNTRY_BORDERS_URL = "/assets/ne_110m_admin_0_countries.geojson";
 
 // ─── Ripple marker internal type ─────────────────────────────────────────
 interface RippleMarker {
