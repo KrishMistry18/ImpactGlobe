@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
-import useSWR from 'swr'
+import useSWR, { preload } from 'swr'
 import { useGlobeStore } from '@/store/useGlobeStore'
 import type { EnvLayerType, EnvLayerData } from '@/store/types'
 
@@ -35,6 +35,26 @@ const REFRESH_INTERVALS: Record<EnvLayerType, number> = {
   wildfires: 900_000,
   storms: 900_000,
   sea_temp: 86400_000,
+}
+
+/** Preload all environmental layers to ensure instant switching */
+export function prefetchAllEnvLayers() {
+  const layers: EnvLayerType[] = [
+    'wind',
+    'temperature_anomaly',
+    'aqi',
+    'earthquakes',
+    'wildfires',
+    'storms',
+    'sea_temp'
+  ]
+
+  layers.forEach((layer) => {
+    const path = layerTypeToPath(layer)
+    if (path) {
+      preload([`/api/env/${path}`, layer], ([url]: [string]) => fetcher(url))
+    }
+  })
 }
 
 /** Fetch environmental layer data and sync to Zustand store */

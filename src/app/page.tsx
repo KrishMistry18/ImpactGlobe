@@ -12,7 +12,7 @@ import { NewsTicker } from "@/components/ui/NewsTicker";
 import { EnvLayerPanel } from "@/components/ui/EnvLayerPanel";
 import { PlaybackControls } from "@/components/ui/PlaybackControls";
 import { useRealtimeEvents } from "@/lib/realtime/useRealtimeEvents";
-import { useEnvLayer } from "@/hooks/useEnvLayer";
+import { useEnvLayer, prefetchAllEnvLayers } from "@/hooks/useEnvLayer";
 import { useGlobeStore } from "@/store/useGlobeStore";
 import type { GlobeRef } from "@/components/globe/GlobeRenderer";
 import type { GlobeEvent } from "@/store/types";
@@ -46,6 +46,11 @@ export default function Home() {
 
   // Fetch environmental layer data when layer changes
   useEnvLayer(activeEnvLayer);
+
+  // Prefetch all layers on mount for instant switching
+  useEffect(() => {
+    prefetchAllEnvLayers();
+  }, []);
 
   // ── Dev-mode cron heartbeat ──────────────────────────────────────────────
   // Vercel crons don't run locally. This fires every minute in development
