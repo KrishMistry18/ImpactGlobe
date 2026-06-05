@@ -8,14 +8,15 @@ if (!admin.apps.length) {
 
     // Clean up private key if it was pasted with quotes or escaped newlines
     if (privateKey) {
-      privateKey = privateKey.trim().replace(/^["']+|["']+$/g, '');
-      privateKey = privateKey.replace(/\\n/g, '\n');
-      privateKey = privateKey.replace(/\\r/g, '');
-      
-      // Ensure proper newlines around the header and footer in case they were stripped
+      privateKey = privateKey.trim().replace(/^["']+|["']+$/g, '').replace(/\\n/g, '\n').replace(/\\r/g, '');
       if (!privateKey.includes('\n')) {
-        privateKey = privateKey.replace('-----BEGIN PRIVATE KEY-----', '-----BEGIN PRIVATE KEY-----\n')
-                               .replace('-----END PRIVATE KEY-----', '\n-----END PRIVATE KEY-----');
+        const beginMarker = '-----BEGIN PRIVATE KEY-----';
+        const endMarker = '-----END PRIVATE KEY-----';
+        if (privateKey.includes(beginMarker) && privateKey.includes(endMarker)) {
+          const base64 = privateKey.substring(privateKey.indexOf(beginMarker) + beginMarker.length, privateKey.indexOf(endMarker)).trim();
+          const wrappedBase64 = base64.match(/.{1,64}/g)?.join('\n') || '';
+          privateKey = `${beginMarker}\n${wrappedBase64}\n${endMarker}\n`;
+        }
       }
     }
 
