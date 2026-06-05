@@ -13,7 +13,8 @@ if (!admin.apps.length) {
         const beginMarker = '-----BEGIN PRIVATE KEY-----';
         const endMarker = '-----END PRIVATE KEY-----';
         if (privateKey.includes(beginMarker) && privateKey.includes(endMarker)) {
-          const base64 = privateKey.substring(privateKey.indexOf(beginMarker) + beginMarker.length, privateKey.indexOf(endMarker)).trim();
+          let base64 = privateKey.substring(privateKey.indexOf(beginMarker) + beginMarker.length, privateKey.indexOf(endMarker));
+          base64 = base64.replace(/\s+/g, '');
           const wrappedBase64 = base64.match(/.{1,64}/g)?.join('\n') || '';
           privateKey = `${beginMarker}\n${wrappedBase64}\n${endMarker}\n`;
         }
