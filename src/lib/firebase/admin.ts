@@ -8,10 +8,15 @@ if (!admin.apps.length) {
 
     // Clean up private key if it was pasted with quotes or escaped newlines
     if (privateKey) {
-      if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
-        privateKey = privateKey.slice(1, -1);
-      }
+      privateKey = privateKey.trim().replace(/^["']+|["']+$/g, '');
       privateKey = privateKey.replace(/\\n/g, '\n');
+      privateKey = privateKey.replace(/\\r/g, '');
+      
+      // Ensure proper newlines around the header and footer in case they were stripped
+      if (!privateKey.includes('\n')) {
+        privateKey = privateKey.replace('-----BEGIN PRIVATE KEY-----', '-----BEGIN PRIVATE KEY-----\n')
+                               .replace('-----END PRIVATE KEY-----', '\n-----END PRIVATE KEY-----');
+      }
     }
 
     if (projectId && clientEmail && privateKey) {
