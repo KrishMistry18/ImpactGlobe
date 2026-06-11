@@ -30,7 +30,7 @@ ImpactGlobe is an intelligence dashboard that pulls together global news, enviro
 
 ---
 
-## 🛠️ Tech Stack
+## 🛠️ Tech Stack Used
 
 | Layer | Technology |
 |---|---|
