@@ -4,6 +4,8 @@ import { getRecentEarthquakes } from '@/lib/env/usgs'
 import type { EnvLayerData } from '@/store/types'
 import { isRateLimited, RATE_LIMITS } from '@/lib/utils/ratelimit'
 
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/env/earthquakes
  * Fetch earthquake data from USGS

@@ -40,4 +40,9 @@ if (!admin.apps.length) {
 }
 
 export const adminDb = admin.firestore();
+try {
+  adminDb.settings({ preferRest: true });
+} catch (e) {
+  // Ignore if already set
+}
 export const adminAuth = admin.auth();

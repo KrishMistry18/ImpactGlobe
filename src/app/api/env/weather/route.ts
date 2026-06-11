@@ -6,6 +6,8 @@ import { getZoneForType, getCurrentZoneForType, GLOBE_ZONES } from '@/lib/env/zo
 import type { EnvLayerData, WindPoint, TempAnomalyPoint } from '@/store/types'
 import { FieldPath } from 'firebase-admin/firestore'
 
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/env/weather
  * Returns wind + temperature anomaly data from Open-Meteo (free, no key).

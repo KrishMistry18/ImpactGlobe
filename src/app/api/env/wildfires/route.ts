@@ -4,6 +4,8 @@ import { getWildfires } from '@/lib/env/eonet'
 import type { EnvLayerData } from '@/store/types'
 import { isRateLimited, RATE_LIMITS } from '@/lib/utils/ratelimit'
 
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/env/wildfires
  * Fetch wildfire data from NASA EONET

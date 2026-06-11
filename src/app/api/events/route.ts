@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb, adminAuth } from '@/lib/firebase/admin'
 
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/events
  * Fetch all active events with optional filters

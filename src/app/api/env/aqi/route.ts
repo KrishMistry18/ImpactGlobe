@@ -5,6 +5,8 @@ import { getZoneForType, getCurrentZoneForType, GLOBE_ZONES } from '@/lib/env/zo
 import type { EnvLayerData, AQIPoint } from '@/store/types'
 import { FieldPath } from 'firebase-admin/firestore'
 
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/env/aqi
  * Returns global AQI data from Open-Meteo Air Quality API (free, no key).

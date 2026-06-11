@@ -4,6 +4,8 @@ import { getStorms } from '@/lib/env/eonet'
 import type { EnvLayerData } from '@/store/types'
 import { isRateLimited, RATE_LIMITS } from '@/lib/utils/ratelimit'
 
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/env/storms
  * Fetch severe storm data from NASA EONET

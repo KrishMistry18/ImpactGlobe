@@ -5,6 +5,8 @@ import { getZoneForType, getCurrentZoneForType, GLOBE_ZONES } from '@/lib/env/zo
 import type { EnvLayerData, SeaTempPoint } from '@/store/types'
 import { FieldPath } from 'firebase-admin/firestore'
 
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/env/sea-temp
  * Sea surface temperature from Open-Meteo Marine API (free, no key).
