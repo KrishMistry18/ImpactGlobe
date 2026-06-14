@@ -28,9 +28,9 @@ export async function GET() {
     const windPoints: WindPoint[] = windRow?.data?.points ?? []
     const tempPoints: TempAnomalyPoint[] = tempRow?.data?.points ?? []
 
-    const isFresh = (r: typeof windRow) =>
+    const isFresh = (r: { expires_at?: string } | undefined | null) =>
       !!r?.expires_at && new Date(r.expires_at).getTime() > now.getTime()
-    const stale = !isFresh(windRow) || !isFresh(tempRow)
+    const stale = !isFresh(windRow as any) || !isFresh(tempRow as any)
 
     if (stale && !refreshing) {
       refreshing = true
