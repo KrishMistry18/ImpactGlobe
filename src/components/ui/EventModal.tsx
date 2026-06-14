@@ -5,7 +5,7 @@ import { ImpactBadge } from "./ImpactBadge";
 import { CategoryBadge } from "./CategoryBadge";
 
 import { formatDistanceToNow } from "date-fns";
-import { X, ExternalLink, TrendingUp, TrendingDown } from "lucide-react";
+import { X, ExternalLink, TrendingUp, TrendingDown, MapPin } from "lucide-react";
 
 export function EventModal() {
   const selectedEvent = useGlobeStore((s) => s.selectedEvent);
@@ -42,7 +42,9 @@ export function EventModal() {
                 {selectedEvent.headline}
               </h2>
               <div className="mt-2 flex items-center gap-4 text-sm text-text-muted">
-                <span>📍 {selectedEvent.country}</span>
+                <span className="flex items-center gap-1">
+                  <MapPin className="h-3.5 w-3.5" /> {selectedEvent.country}
+                </span>
                 <span>•</span>
                 <span>
                   {formatDistanceToNow(new Date(selectedEvent.publishedAt), {
@@ -51,7 +53,13 @@ export function EventModal() {
                 </span>
                 <span>•</span>
                 <span>
-                  Confidence: {Math.round(selectedEvent.confidenceScore * 100)}%
+                  Confidence:{" "}
+                  {Math.round(
+                    selectedEvent.confidenceScore <= 1
+                      ? selectedEvent.confidenceScore * 100
+                      : selectedEvent.confidenceScore,
+                  )}
+                  %
                 </span>
               </div>
             </div>

@@ -1,19 +1,13 @@
 "use client";
 
-import { ReactNode } from "react";
-import TopBar from "./TopBar";
+import type { ReactNode } from "react";
+import { Header } from "./Header";
 
-interface AppShellProps {
-  children: ReactNode;
-}
-
-export default function AppShell({ children }: AppShellProps) {
+export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-bg-primary">
-      <TopBar />
-      <main className="absolute inset-0 top-16 bottom-0 w-full">
-        {children}
-      </main>
+      <Header />
+      <main className="absolute inset-x-0 bottom-0 top-14">{children}</main>
     </div>
   );
 }

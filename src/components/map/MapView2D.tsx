@@ -4,6 +4,18 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import type { GlobeEvent, EnvLayerData } from "@/store/types";
 import type { HoveredEnvPoint } from "@/store/useGlobeStore";
 import { useGlobeStore } from "@/store/useGlobeStore";
+import {
+  createHeatmapTexture,
+  ensureSeaMask,
+  onSeaMaskReady,
+  isLandAt,
+} from "@/components/globe/heatmap.utils";
+import {
+  WindField,
+  createParticles,
+  stepParticles,
+  type Particle,
+} from "@/components/globe/windField";
 
 const IMPACT_COLORS: Record<string, string> = {
   Critical: "#ff2d55", High: "#ff9f0a", Medium: "#ffd60a", Low: "#34c759",
@@ -16,73 +28,37 @@ interface Props {
   onEventClick?: (event: GlobeEvent) => void;
 }
 
-type RGB = [number, number, number];
-
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
-
-// ── Color ramps — IDENTICAL to heatmap.utils.ts on the 3D globe ─────────
-// gradientColor maps a 0-1 normalised value through a set of equally-spaced
-// colour stops (same algorithm as the 3D renderer).
-function gradientColor(t: number, stops: RGB[]): RGB {
-  const clamped = Math.max(0, Math.min(1, t));
-  const seg = clamped * (stops.length - 1);
-  const idx = Math.min(Math.floor(seg), stops.length - 2);
-  const frac = seg - idx;
-  const a = stops[idx], b = stops[idx + 1];
-  return [
-    Math.round(a[0] + (b[0] - a[0]) * frac),
-    Math.round(a[1] + (b[1] - a[1]) * frac),
-    Math.round(a[2] + (b[2] - a[2]) * frac),
-  ];
-}
-
-// Wind: 0 → 38 m/s (Beaufort-based, same as 3D globe)
-const WIND_STOPS: RGB[]  = [
-  [20, 60, 220], [0, 160, 255], [0, 210, 180],
-  [80, 220, 50], [255, 230, 0], [255, 140, 0],
-  [240, 40, 20], [140, 0, 180],
-];
-const WIND_MAX = 38;
-
-// Temperature: -40 → 45°C (ERA5/Windy palette, same as 3D globe)
-const TEMP_STOPS: RGB[] = [
-  [100, 0, 200], [0, 40, 230], [30, 120, 255], [140, 200, 255],
-  [230, 240, 255], [255, 250, 180], [255, 180, 40], [255, 60, 0], [180, 0, 0],
-];
-const TEMP_MIN   = -40;
-const TEMP_RANGE = 85;   // 45 - (-40)
-
-// AQI: 0 → 500 (US EPA, same as 3D globe)
-const AQI_STOPS: RGB[] = [
-  [0, 228, 0], [255, 255, 0], [255, 126, 0],
-  [255, 0, 0], [143, 63, 151], [126, 0, 35],
-];
-const AQI_MAX = 500;
-
-// Sea temp: -2 → 32°C (NOAA/Copernicus, same as 3D globe)
-const SEA_STOPS: RGB[] = [
-  [200, 230, 255], [0, 60, 200], [0, 140, 230], [0, 210, 210],
-  [0, 200, 120], [80, 210, 0], [255, 220, 0], [255, 120, 0], [220, 10, 10],
-];
-const SEA_MIN   = -2;
-const SEA_RANGE = 34;   // 32 - (-2)
-
-// Map a raw scalar value to the correct RGB via the same normalisation as 3D
-function layerColor(layer: string, val: number): RGB {
-  switch (layer) {
-    case "wind":                return gradientColor(Math.max(0, val) / WIND_MAX, WIND_STOPS);
-    case "temperature_anomaly": return gradientColor(Math.max(0, val - TEMP_MIN) / TEMP_RANGE, TEMP_STOPS);
-    case "aqi":                 return gradientColor(Math.max(0, val) / AQI_MAX, AQI_STOPS);
-    case "sea_temp":            return gradientColor(Math.max(0, val - SEA_MIN) / SEA_RANGE, SEA_STOPS);
-    default:                    return [128, 128, 128];
-  }
-}
 
 // ── Grid stores raw scalar values (NOT colors) for smooth interpolation ───
 type ValGrid = { vals: (number | null)[]; GW: number; GH: number; step: number; layer: string };
 
 function buildValGrid(layer: string, data: EnvLayerData | null): ValGrid | null {
-  const step = 2.5;
+  if (!data) return null;
+
+  // ── PREFERRED PATH: Use server-side pre-interpolated grid ──────────────
+  // When the API returns a dense grid, use it directly — no BFS, no blur,
+  // just hand it to the sampling code as-is. Much faster and more accurate.
+  const serverGrid = (() => {
+    if (layer === "wind" && data.windGrid) return data.windGrid;
+    if (layer === "temperature_anomaly" && data.tempGrid) return data.tempGrid;
+    if (layer === "aqi" && data.aqiGrid) return data.aqiGrid;
+    if (layer === "sea_temp" && data.seaTempGrid) return data.seaTempGrid;
+    return null;
+  })();
+
+  if (serverGrid) {
+    // Convert server grid to ValGrid format.
+    // Server grid: row-major, row 0 = lat +90, col 0 = lon -180, 1° resolution.
+    // ValGrid step = 1 (1° per cell) to match server grid resolution.
+    const GW = serverGrid.width;   // 360
+    const GH = serverGrid.height;  // 181
+    return { vals: serverGrid.values, GW, GH, step: 1, layer };
+  }
+
+  // ── FALLBACK: Build from sparse points + BFS flood-fill ────────────────
+  // Used when the API hasn't returned a grid yet (first load, cache miss).
+  const step = 1.5;
   const GW = Math.ceil(360 / step) + 1;
   const GH = Math.ceil(180 / step) + 1;
   const vals: (number | null)[] = new Array(GW * GH).fill(null);
@@ -92,8 +68,6 @@ function buildValGrid(layer: string, data: EnvLayerData | null): ValGrid | null 
     const j = Math.round((90 - lat)  / step);
     if (i >= 0 && i < GW && j >= 0 && j < GH) vals[j * GW + i] = v;
   };
-
-  if (!data) return null;
 
   if (layer === "wind" && data.wind) {
     data.wind.forEach((p) => put(p.lat, p.lon, p.speed ?? 0));
@@ -107,27 +81,31 @@ function buildValGrid(layer: string, data: EnvLayerData | null): ValGrid | null 
     return null;
   }
 
-  // BFS flood-fill
+  // BFS flood-fill with hop limit
+  const MAX_BFS_HOPS = 20;
+  const hops = new Uint16Array(vals.length);
   const queue: number[] = [];
   for (let k = 0; k < vals.length; k++) if (vals[k] !== null) queue.push(k);
   let head = 0;
   const dirs = [-1, 1, -GW, GW];
   while (head < queue.length) {
     const k = queue[head++];
+    if (hops[k] >= MAX_BFS_HOPS) continue;
     for (const d of dirs) {
       const nk = k + d;
       if (nk >= 0 && nk < vals.length && vals[nk] === null) {
         if (d === -1 && k % GW === 0) continue;
         if (d === 1 && k % GW === GW - 1) continue;
         vals[nk] = vals[k];
+        hops[nk] = hops[k] + 1;
         queue.push(nk);
       }
     }
   }
 
-  // Gaussian blur (6 passes) for smooth gradients
+  // Gaussian blur (8 passes) for smooth gradients
   let src = vals as number[];
-  for (let pass = 0; pass < 6; pass++) {
+  for (let pass = 0; pass < 8; pass++) {
     const dst = new Array<number>(GW * GH);
     for (let j = 0; j < GH; j++) {
       for (let i = 0; i < GW; i++) {
@@ -169,12 +147,6 @@ function sampleScalar(g: ValGrid, lat: number, lon: number): number | null {
   return lerp(lerp(s00, s10, tx), lerp(s01, s11, tx), ty);
 }
 
-function sampleGrid(g: ValGrid, lat: number, lon: number): RGB | null {
-  const val = sampleScalar(g, lat, lon);
-  if (val === null) return null;
-  return layerColor(g.layer, val);
-}
-
 // ── Build a HoveredEnvPoint from the interpolated grid ───────────────────
 function buildHoverPoint(
   layer: string,
@@ -213,6 +185,7 @@ function buildHoverPoint(
     };
   }
   if (layer === "sea_temp") {
+    if (isLandAt(lat, lon)) return null; // no SST over land
     return { type: "sea_temp", lat, lon, tempC: val };
   }
   return null;
@@ -225,14 +198,23 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const markersLayerRef = useRef<any>(null);
   const envCleanupRef   = useRef<(() => void) | null>(null);
+  const windCleanupRef  = useRef<(() => void) | null>(null);
   const initRef         = useRef(false);
   // Stores the current grid so the mousemove handler can sample it
   const gridRef         = useRef<ValGrid | null>(null);
 
   // Trigger state so the heatmap effect re-runs when the map becomes ready
   const [mapReady, setMapReady] = useState(false);
+  // Bumped when the sea-temp land mask finishes loading → rebuilds the texture
+  const [seaMaskVersion, setSeaMaskVersion] = useState(0);
 
   const setHoveredEnvPoint = useGlobeStore((s) => s.setHoveredEnvPoint);
+
+  // Preload the coastline mask once; rebuild the overlay when it's ready.
+  useEffect(() => {
+    ensureSeaMask();
+    return onSeaMaskReady(() => setSeaMaskVersion((v) => v + 1));
+  }, []);
 
   // ── Init Leaflet map (guarded against double-init from StrictMode / HMR) ─
   useEffect(() => {
@@ -275,6 +257,7 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
     });
     return () => {
       envCleanupRef.current?.();
+      windCleanupRef.current?.();
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
       initRef.current = false;
       setMapReady(false);
@@ -312,7 +295,7 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
       });
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events, activeEnvLayer, pulsingIcon]);
+  }, [events, activeEnvLayer, pulsingIcon, mapReady]);
 
   // ── Windy-style pixel heatmap + hover tooltip ─────────────────────────────
   // Depends on mapReady so it re-runs when Leaflet finishes async init
@@ -328,8 +311,19 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
       if (!["wind","temperature_anomaly","aqi","sea_temp"].includes(activeEnvLayer) || !envLayerData) return;
 
       const grid = buildValGrid(activeEnvLayer, envLayerData);
-      if (!grid) return;
-      gridRef.current = grid;
+      gridRef.current = grid; // used by the hover tooltip (scalar values)
+
+      // Visual: reuse the SAME polished equirectangular texture as the 3D globe
+      // (premultiplied blur + sea-temp coastline mask + identical colour scales),
+      // then sample it per screen-pixel through Leaflet's projection so it lines
+      // up correctly with the Web-Mercator base map at every zoom.
+      const texCanvas = createHeatmapTexture(activeEnvLayer, envLayerData);
+      if (!texCanvas) return;
+      const TW = texCanvas.width;
+      const TH = texCanvas.height;
+      const texData = texCanvas
+        .getContext("2d")!
+        .getImageData(0, 0, TW, TH).data;
 
       const overlayPane = map.getPanes().overlayPane as HTMLElement;
       const canvas = document.createElement("canvas");
@@ -355,25 +349,39 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
         const pxData = img.data;
 
         const bounds = map.getBounds();
-        const north = bounds.getNorth(), south = bounds.getSouth();
         const west  = bounds.getWest(),  east  = bounds.getEast();
-        const latStep = (north - south) / H;
         const lonStep = (east - west) / W;
 
+        // Precompute per-row latitudes using Leaflet's Mercator projection
+        // instead of linear interpolation (which causes vertical misalignment).
+        // containerPointToLatLng respects the actual map projection (EPSG:3857).
+        const latRows = new Float64Array(H);
         for (let y = 0; y < H; y++) {
-          const lat = north - latStep * y;
+          const containerY = y * (fullH / H);
+          const latlng = map.containerPointToLatLng([0, containerY]);
+          latRows[y] = latlng.lat;
+        }
+
+        for (let y = 0; y < H; y++) {
+          const lat = latRows[y];
           if (lat < -85 || lat > 85) continue;
           const rowOff = y * W * 4;
           for (let x = 0; x < W; x++) {
             const rawLon = west + lonStep * x;
             const lon = ((rawLon + 180) % 360 + 360) % 360 - 180;
-            const cell = sampleGrid(grid, lat, lon);
-            if (cell) {
+            // Equirectangular texel for this lat/lon (texture is lat/lon-linear).
+            let tpx = ((lon + 180) / 360 * TW) | 0;
+            let tpy = ((90 - lat) / 180 * TH) | 0;
+            if (tpx < 0) tpx = 0; else if (tpx >= TW) tpx = TW - 1;
+            if (tpy < 0) tpy = 0; else if (tpy >= TH) tpy = TH - 1;
+            const ti = (tpy * TW + tpx) * 4;
+            const a = texData[ti + 3];
+            if (a > 0) {
               const k = rowOff + x * 4;
-              pxData[k]     = cell[0];
-              pxData[k + 1] = cell[1];
-              pxData[k + 2] = cell[2];
-              pxData[k + 3] = 148;
+              pxData[k]     = texData[ti];
+              pxData[k + 1] = texData[ti + 1];
+              pxData[k + 2] = texData[ti + 2];
+              pxData[k + 3] = (a * 0.72) | 0; // slightly translucent over the map
             }
           }
         }
@@ -401,6 +409,99 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
         canvas.parentNode?.removeChild(canvas);
       };
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeEnvLayer, envLayerData, mapReady, seaMaskVersion]);
+
+  // ── Animated wind streamlines (Windy-style) ───────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    let cancelled = false;
+
+    import("leaflet").then(() => {
+      if (cancelled) return;
+      windCleanupRef.current?.();
+      windCleanupRef.current = null;
+      if (activeEnvLayer !== "wind" || !envLayerData?.wind?.length) return;
+
+      const field = new WindField(
+        envLayerData.wind.map((p) => ({
+          lat: p.lat, lon: p.lon, speed: p.speed, direction: p.direction,
+        })),
+      );
+      const particles: Particle[] = createParticles(900);
+      const maxSpeed = field.maxSpeed || 1;
+
+      const overlayPane = map.getPanes().overlayPane as HTMLElement;
+      const canvas = document.createElement("canvas");
+      canvas.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;z-index:420;";
+      overlayPane.appendChild(canvas);
+      const ctx = canvas.getContext("2d")!;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      let raf = 0;
+      let last = 0;
+      const FRAME_MS = 1000 / 30;
+      const draw = (t: number) => {
+        raf = requestAnimationFrame(draw);
+        if (t - last < FRAME_MS) return;
+        last = t;
+
+        const fullW = map.getSize().x;
+        const fullH = map.getSize().y;
+        if (canvas.width !== fullW) canvas.width = fullW;
+        if (canvas.height !== fullH) canvas.height = fullH;
+        const origin = map.containerPointToLayerPoint([0, 0]);
+        canvas.style.left = `${origin.x}px`;
+        canvas.style.top = `${origin.y}px`;
+
+        ctx.clearRect(0, 0, fullW, fullH);
+        stepParticles(particles, field, 0.05);
+
+        for (const p of particles) {
+          const h = p.hist;
+          if (h.length < 4) continue;
+          const speedT = Math.min(1, p.speed / maxSpeed);
+          ctx.lineWidth = 0.6 + speedT * 1.4;
+          ctx.strokeStyle = `rgba(255,255,255,${0.25 + 0.5 * speedT})`;
+          ctx.beginPath();
+          let started = false;
+          let prevLon = 0;
+          for (let k = 0; k + 1 < h.length; k += 2) {
+            const lat = h[k];
+            const lon = h[k + 1];
+            if (started && Math.abs(lon - prevLon) > 180) {
+              ctx.stroke();
+              ctx.beginPath();
+              started = false;
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const pt = map.latLngToContainerPoint([lat, lon] as any);
+            if (!started) {
+              ctx.moveTo(pt.x, pt.y);
+              started = true;
+            } else {
+              ctx.lineTo(pt.x, pt.y);
+            }
+            prevLon = lon;
+          }
+          ctx.stroke();
+        }
+      };
+      raf = requestAnimationFrame(draw);
+
+      windCleanupRef.current = () => {
+        cancelAnimationFrame(raf);
+        canvas.parentNode?.removeChild(canvas);
+      };
+    });
+
+    return () => {
+      cancelled = true;
+      windCleanupRef.current?.();
+      windCleanupRef.current = null;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeEnvLayer, envLayerData, mapReady]);
 

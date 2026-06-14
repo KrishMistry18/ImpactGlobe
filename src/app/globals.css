@@ -1,37 +1,46 @@
-@import "tailwindcss/index.css";
+@import "tailwindcss";
 
-/* ===== ImpactGlobe Design System — Tailwind v4 CSS Theme ===== */
+/* ============================================================================
+   ImpactGlobe — Design System (Tailwind v4 CSS theme)
+   "Deep-space observatory": near-black navy canvas, cyan accent, semantic
+   impact palette. Tokens are the single source of truth for colour — keep them
+   in sync with src/lib/constants.ts (IMPACT_META / ENV_LAYER_META).
+   ========================================================================== */
 
 @theme inline {
-  /* Background colors */
-  --color-bg-primary: #050a14;
-  --color-bg-surface: #0a0e1a;
-  --color-bg-card: #0f1628;
-  --color-bg-elevated: #141c2e;
+  /* Surfaces (darkest → lightest) */
+  --color-bg-primary: #060910;
+  --color-bg-surface: #0a0f1c;
+  --color-bg-card: #111a2d;
+  --color-bg-elevated: #18233b;
 
-  /* Impact severity colors */
-  --color-impact-critical: #e24b4a;
-  --color-impact-high: #ef9f27;
-  --color-impact-medium: #1d9e75;
-  --color-impact-low: #378add;
+  /* Brand accent (CTAs, focus, active controls) */
+  --color-accent: #38bdf8;
+  --color-accent-strong: #0ea5e9;
 
-  /* Environmental layer colors */
-  --color-env-wind: #00d4ff;
-  --color-env-aqi: #ff6b35;
-  --color-env-temp: #ff4757;
-  --color-env-sea: #2ed573;
-  --color-env-fire: #ffa502;
-  --color-env-quake: #a29bfe;
-  --color-env-storm: #74b9ff;
+  /* Impact severity */
+  --color-impact-critical: #f0524f;
+  --color-impact-high: #f5a524;
+  --color-impact-medium: #3ba776;
+  --color-impact-low: #4a90d9;
 
-  /* Text colors */
-  --color-text-primary: #f1f0e8;
-  --color-text-secondary: #b4b2a9;
-  --color-text-muted: #6b6a63;
+  /* Environmental layers (match ENV_LAYER_META accents) */
+  --color-env-wind: #38bdf8;
+  --color-env-aqi: #a3e635;
+  --color-env-temp: #fb7185;
+  --color-env-sea: #2dd4bf;
+  --color-env-fire: #fb923c;
+  --color-env-quake: #a78bfa;
+  --color-env-storm: #60a5fa;
 
-  /* Border colors */
+  /* Text */
+  --color-text-primary: #eef2f8;
+  --color-text-secondary: #9fb0c6;
+  --color-text-muted: #5e6f88;
+
+  /* Borders */
   --color-border-subtle: rgba(255, 255, 255, 0.06);
-  --color-border-default: rgba(255, 255, 255, 0.12);
+  --color-border-default: rgba(255, 255, 255, 0.11);
   --color-border-strong: rgba(255, 255, 255, 0.2);
 
   /* Fonts */
@@ -39,85 +48,107 @@
   --font-sans: "DM Sans", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", monospace;
 
-  /* Custom animations */
+  /* Animations */
   --animate-ticker: ticker 40s linear infinite;
   --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  --animate-fade-in: fadeIn 0.15s ease-out;
-  --animate-slide-in: slideIn 0.2s ease-out;
+  --animate-fade-in: fadeIn 0.16s ease-out;
+  --animate-slide-up: slideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-in: slideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   --animate-spin-slow: spin 8s linear infinite;
-}
-
-/* ===== CSS Custom Properties ===== */
-:root {
-  --bg-primary: #050a14;
-  --bg-surface: #0a0e1a;
-  --bg-card: #0f1628;
-  --bg-elevated: #141c2e;
-  --impact-critical: #e24b4a;
-  --impact-high: #ef9f27;
-  --impact-medium: #1d9e75;
-  --impact-low: #378add;
-  --text-primary: #f1f0e8;
-  --text-secondary: #b4b2a9;
-  --text-muted: #6b6a63;
 }
 
 /* ===== Keyframes ===== */
 @keyframes ticker {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
 }
-
 @keyframes fadeIn {
-  0% { opacity: 0; }
-  100% { opacity: 1; }
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes slideIn {
-  0% { opacity: 0; transform: translateY(8px); }
-  100% { opacity: 1; transform: translateY(0); }
-}
+/* ===== Base ===== */
+*, *::before, *::after { box-sizing: border-box; }
 
-/* ===== Base Styles ===== */
-*, *::before, *::after {
-  box-sizing: border-box;
-}
+html, body { height: 100%; }
 
 body {
   margin: 0;
-  background: #050a14;
-  color: #f1f0e8;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
   font-family: var(--font-sans);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* Custom scrollbar for dark theme */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: var(--bg-primary);
-}
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 99px;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.22); }
+
+/* ===== Reusable utilities ===== */
+
+/* Frosted panel chrome used by sidebars / popovers / modals */
+.panel {
+  background: color-mix(in srgb, var(--color-bg-surface) 82%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid var(--color-border-subtle);
 }
 
-/* Glassmorphism utility */
 .glass {
-  background: rgba(15, 22, 40, 0.8);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--color-bg-card) 80%, transparent);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--color-border-subtle);
 }
 
-/* Glow effects */
-.glow-critical { box-shadow: 0 0 20px rgba(226, 75, 74, 0.3); }
-.glow-high { box-shadow: 0 0 20px rgba(239, 159, 39, 0.3); }
-.glow-medium { box-shadow: 0 0 20px rgba(29, 158, 117, 0.3); }
-.glow-low { box-shadow: 0 0 20px rgba(55, 138, 221, 0.3); }
-.glow-env-wind { box-shadow: 0 0 20px rgba(0, 212, 255, 0.3); }
-.glow-env-fire { box-shadow: 0 0 20px rgba(255, 165, 2, 0.3); }
-.glow-env-quake { box-shadow: 0 0 20px rgba(162, 155, 254, 0.3); }
+/* Hairline grid texture overlay (optional, subtle depth) */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+/* Thin custom scrollbar for inner scroll regions */
+.scroll-slim { scrollbar-width: thin; }
+
+/* Glow helpers */
+.glow-accent { box-shadow: 0 0 24px rgba(56, 189, 248, 0.25); }
+.glow-critical { box-shadow: 0 0 22px rgba(240, 82, 79, 0.28); }
+
+/* Live pulse dot */
+.live-dot {
+  position: relative;
+  display: inline-flex;
+  height: 0.5rem;
+  width: 0.5rem;
+}
+.live-dot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.7;
+  animation: ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+.live-dot::after {
+  content: "";
+  position: relative;
+  border-radius: 9999px;
+  height: 100%;
+  width: 100%;
+  background: currentColor;
+}
+@keyframes ping {
+  75%, 100% { transform: scale(2.2); opacity: 0; }
+}

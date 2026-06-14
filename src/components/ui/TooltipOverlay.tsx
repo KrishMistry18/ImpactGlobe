@@ -5,6 +5,8 @@ import { ImpactBadge } from "./ImpactBadge";
 import { CategoryBadge } from "./CategoryBadge";
 import { formatDistanceToNow } from "date-fns";
 import type { HoveredEnvPoint } from "@/store/useGlobeStore";
+import { gradientColor, AQI_STOPS, AQI_MAX } from "@/components/globe/heatmap.utils";
+import { MapPin } from "lucide-react";
 
 // ── Wind direction label ─────────────────────────────────────────────────────
 function windDir(deg: number): string {
@@ -14,12 +16,8 @@ function windDir(deg: number): string {
 
 // ── AQI colour ───────────────────────────────────────────────────────────────
 function aqiColor(aqi: number): string {
-  if (aqi <= 50) return "#00e400";
-  if (aqi <= 100) return "#ffff00";
-  if (aqi <= 150) return "#ff7e00";
-  if (aqi <= 200) return "#ff0000";
-  if (aqi <= 300) return "#8f3f97";
-  return "#7e0023";
+  const [r, g, b] = gradientColor(Math.max(0, aqi) / AQI_MAX, AQI_STOPS as [number, number, number][]);
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 // ── Env point tooltip ────────────────────────────────────────────────────────
@@ -40,8 +38,8 @@ function EnvTooltip({
     >
       <div className="min-w-[180px] rounded-lg border border-border-default bg-bg-card/95 p-3 shadow-2xl backdrop-blur-sm">
         {/* Coordinates */}
-        <div className="mb-2 text-xs font-mono text-text-muted">
-          📍 {latStr}, {lonStr}
+        <div className="mb-2 flex items-center gap-1 font-mono text-xs text-text-muted">
+          <MapPin className="h-3 w-3" /> {latStr}, {lonStr}
         </div>
 
         {point.type === "wind" && (
@@ -208,8 +206,8 @@ export function TooltipOverlay() {
         </p>
 
         {/* Country */}
-        <div className="flex items-center gap-2 text-xs text-text-muted">
-          <span className="font-medium">📍</span>
+        <div className="flex items-center gap-1.5 text-xs text-text-muted">
+          <MapPin className="h-3 w-3" />
           <span>{event.country}</span>
         </div>
 

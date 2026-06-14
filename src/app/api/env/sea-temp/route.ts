@@ -1,105 +1,70 @@
 import { NextResponse } from 'next/server'
+import { after } from 'next/server'
 import { adminDb } from '@/lib/firebase/admin'
-import { getSeaTempForZone } from '@/lib/env/seatemp'
-import { getZoneForType, getCurrentZoneForType, GLOBE_ZONES } from '@/lib/env/zones'
+import { fetchGlobalSeaTemp } from '@/lib/env/seatemp'
+import { interpolateToGrid, gridToJSON } from '@/lib/env/gridInterpolator'
 import type { EnvLayerData, SeaTempPoint } from '@/store/types'
-import { FieldPath } from 'firebase-admin/firestore'
 
-export const dynamic = 'force-dynamic';
+const KEY = 'sea_temp'
+const CACHE_MS = 172_800_000 // 48h
 
-/**
- * GET /api/env/sea-temp
- * Sea surface temperature from Open-Meteo Marine API (free, no key).
- *
- * Land points are automatically excluded (marine API returns null for them),
- * so the heatmap naturally only covers ocean areas. ✅
- *
- * Strategy:
- * - First load (empty cache): fetch ALL 4 zones immediately
- * - Subsequent loads: staggered rotation (offset 3)
- * - Each zone cached 6 hours ✅
- */
+let refreshing = false
+
+export const maxDuration = 300; // Allow up to 5 minutes on Vercel
+
 export async function GET() {
   try {
     const now = new Date()
-    const sixHoursAgo = new Date(now.getTime() - 21_600_000)
 
-    const zoneIds = GLOBE_ZONES.map(z => `sea_zone_${z.id}`)
+    const docRef = adminDb.collection('env_data_cache').doc(KEY)
+    const cachedDoc = await docRef.get()
+    const row = cachedDoc.exists ? cachedDoc.data() as { data: { points?: SeaTempPoint[] } | null; expires_at: string } : undefined
 
-    const snapshot = await adminDb.collection('env_data_cache')
-      .where(FieldPath.documentId(), 'in', zoneIds)
-      .get()
+    const points: SeaTempPoint[] = row?.data?.points ?? []
+    const stale = !row?.expires_at || new Date(row.expires_at).getTime() <= now.getTime()
 
-    const allCachedZones = snapshot.docs.map(doc => ({ layer_type: doc.id, ...doc.data() } as any))
-    const cacheIsEmpty = allCachedZones.length === 0
-
-    if (cacheIsEmpty) {
-      console.log('[SeaTemp] Cache empty — fetching all zones...')
-      for (const zone of GLOBE_ZONES) {
-        const key = `sea_zone_${zone.id}`
+    if (stale && !refreshing) {
+      refreshing = true
+      console.log('[SeaTemp] Cache stale/missing → starting background refresh')
+      after(async () => {
         try {
-          const points = await getSeaTempForZone(zone)
-          if (points.length > 0) {
-            await adminDb.collection('env_data_cache').doc(key).set({
-              data: { points, zone: zone.id },
-              fetched_at: now.toISOString(),
-              expires_at: new Date(now.getTime() + 172_800_000).toISOString(),
-            }, { merge: true })
-            console.log(`[SeaTemp] Cached ${points.length} pts for ${zone.name}`)
+          const { points: fresh, complete } = await fetchGlobalSeaTemp()
+          if (!complete || fresh.length === 0) {
+            console.warn('[SeaTemp] Background pass incomplete; not overwriting cache')
+            return
           }
+          await adminDb.collection('env_data_cache').doc(KEY).set({
+            layer_type: KEY,
+            data: { points: fresh },
+            fetched_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + CACHE_MS).toISOString(),
+          }, { merge: true })
+          console.log(`[SeaTemp] Background refresh cached: ${fresh.length} pts`)
         } catch (err) {
-          console.error(`[SeaTemp] Failed zone ${zone.name}:`, err)
+          console.error('[SeaTemp] Background refresh error:', err)
+        } finally {
+          refreshing = false
         }
-      }
-    } else {
-      const seaZone = getZoneForType('sea_temp') ?? getCurrentZoneForType('sea_temp')
-      const seaKey = `sea_zone_${seaZone.id}`
-      const zoneCache = allCachedZones.find((c: any) => c.layer_type === seaKey)
-      if (!zoneCache || new Date(zoneCache.fetched_at) < sixHoursAgo) {
-        try {
-          const points = await getSeaTempForZone(seaZone)
-          if (points.length > 0) {
-            await adminDb.collection('env_data_cache').doc(seaKey).set({
-              data: { points, zone: seaZone.id },
-              fetched_at: now.toISOString(),
-              expires_at: new Date(now.getTime() + 172_800_000).toISOString(),
-            }, { merge: true })
-            console.log(`[SeaTemp] Refreshed ${points.length} pts for ${seaZone.name}`)
-          }
-        } catch (err) {
-          console.error(`[SeaTemp] Failed to refresh ${seaZone.name}:`, err)
-        }
-      }
+      })
     }
 
-    // Merge all cached zones
-    const freshSnapshot = await adminDb.collection('env_data_cache')
-      .where(FieldPath.documentId(), 'in', zoneIds)
-      .get()
-      
-    const freshZones = freshSnapshot.docs.map(doc => doc.data())
-
-    const allSeaPoints: SeaTempPoint[] = []
-    freshZones.forEach((z: any) => {
-      const d = z.data as { points: SeaTempPoint[] }
-      if (d?.points) allSeaPoints.push(...d.points)
-    })
-
-    const coverage = Math.round((freshZones.length) / GLOBE_ZONES.length * 100)
-    console.log(`[SeaTemp] Returning ${allSeaPoints.length} pts (${coverage}% coverage)`)
+    const seaTempGrid = points.length > 0
+      ? gridToJSON(interpolateToGrid(points.map((p) => ({ lat: p.lat, lon: p.lon, value: p.tempC })), 10))
+      : undefined
 
     const seaData: EnvLayerData = {
       type: 'sea_temp',
       updatedAt: now.toISOString(),
-      seaTemp: allSeaPoints,
+      seaTemp: points,
+      seaTempGrid,
     }
 
     return NextResponse.json(
-      { ...seaData, meta: { coverage: `${coverage}%`, zonesLoaded: freshZones.length, totalZones: GLOBE_ZONES.length } },
-      { headers: { 'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=7200' } }
+      { ...seaData, meta: { points: points.length, stale, refreshing } },
+      { headers: { 'Cache-Control': 'no-store' } },
     )
   } catch (error) {
     console.error('[SeaTemp] Error:', error)
-    return NextResponse.json({ error: 'Failed to fetch sea temperature data' }, { status: 500 })
+    return NextResponse.json({ error: 'Failed to fetch sea temp data' }, { status: 500 })
   }
 }

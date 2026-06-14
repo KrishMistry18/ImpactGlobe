@@ -1,31 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb } from '@/lib/firebase/admin'
 
-// ── Seed events — used when all AI providers are unavailable ─────────────────
-const SEED_EVENTS = [
-  { headline: 'Russia launches mass drone strike on Kyiv energy grid', country: 'Ukraine', lat: 50.4501, lon: 30.5234, impactLevel: 'Critical', category: 'Geopolitical', summary: 'Russia launched 120+ Shahed drones targeting Kyiv power infrastructure, triggering EU emergency energy summit. UAH and regional currencies under pressure.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'EUR/USD', direction: -1, magnitude: 'Large', movePercent: '-0.6%', reasoning: 'Risk-off; European energy supply shock' }, { pair: 'USD/JPY', direction: -1, magnitude: 'Medium', movePercent: '-0.4%', reasoning: 'Yen safe-haven demand surge' }] },
-  { headline: 'Israel expands ground operation into Rafah amid ceasefire collapse', country: 'Israel', lat: 31.2918, lon: 34.2479, impactLevel: 'Critical', category: 'Geopolitical', summary: 'IDF ground forces entered Rafah as ceasefire talks broke down in Doha. Oil futures jumped 3% on Middle East escalation fears.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'XAU/USD', direction: 1, magnitude: 'Large', movePercent: '+1.2%', reasoning: 'Gold safe-haven bid on conflict escalation' }] },
-  { headline: 'India-Pakistan exchange cross-border artillery fire in Kashmir', country: 'India', lat: 34.0837, lon: 74.7973, impactLevel: 'Critical', category: 'Geopolitical', summary: 'Heavy shelling along the Line of Control following terrorist attack. Nuclear-armed neighbours on highest alert in 5 years.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'USD/INR', direction: 1, magnitude: 'Large', movePercent: '+1.1%', reasoning: 'Rupee crash on war risk' }, { pair: 'USD/PKR', direction: 1, magnitude: 'Large', movePercent: '+2.3%', reasoning: 'Pakistan peso collapses amid conflict' }] },
-  { headline: 'Fed emergency cut 50bps as US bank failures trigger liquidity crisis', country: 'United States', lat: 38.8951, lon: -77.0364, impactLevel: 'Critical', category: 'Central Bank', summary: 'Federal Reserve slashes rates 50bp in emergency session after two regional banks collapse. S&P 500 futures halted limit-down.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'EUR/USD', direction: 1, magnitude: 'Large', movePercent: '+1.4%', reasoning: 'Dollar collapse on Fed crisis cut' }, { pair: 'USD/JPY', direction: -1, magnitude: 'Large', movePercent: '-1.8%', reasoning: 'Massive yen safe-haven surge' }] },
-  { headline: 'Chinese military encircles Taiwan with live-fire naval exercises', country: 'China', lat: 25.0330, lon: 121.5654, impactLevel: 'Critical', category: 'Geopolitical', summary: 'PLA Navy conducts unprecedented 72-hour blockade simulation around Taiwan Strait. Semiconductor stocks plunge 8% globally.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'USD/CNY', direction: 1, magnitude: 'Large', movePercent: '+0.9%', reasoning: 'Yuan pressure on capital flight risk' }, { pair: 'USD/TWD', direction: 1, magnitude: 'Large', movePercent: '+2.1%', reasoning: 'Taiwan dollar sold heavily' }] },
-  { headline: 'ECB raises rates 25bp citing persistent eurozone inflation', country: 'Germany', lat: 50.1109, lon: 8.6821, impactLevel: 'High', category: 'Central Bank', summary: 'European Central Bank delivered 25bp hike to 4.5%, signalling higher-for-longer. Euro strengthened; peripheral bond spreads tightened.', sentiment: 'Positive market sentiment', forexImpacts: [{ pair: 'EUR/USD', direction: 1, magnitude: 'Medium', movePercent: '+0.5%', reasoning: 'ECB hawkishness supports euro' }] },
-  { headline: 'Trump announces 60% tariff on all Chinese electronics imports', country: 'United States', lat: 40.7128, lon: -74.0060, impactLevel: 'High', category: 'Macro', summary: 'Trump White House unveiled sweeping 60% tariff on Chinese tech exports, escalating trade war. Apple and NVIDIA led tech selloff.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'USD/CNY', direction: 1, magnitude: 'Large', movePercent: '+0.7%', reasoning: 'Trade war pressure on yuan' }, { pair: 'AUD/USD', direction: -1, magnitude: 'Medium', movePercent: '-0.5%', reasoning: 'Australia trade exposure to China' }] },
-  { headline: 'Magnitude 7.8 earthquake strikes Istanbul, 2,000 feared dead', country: 'Turkey', lat: 41.0082, lon: 28.9784, impactLevel: 'High', category: 'Natural Disaster', summary: 'Major earthquake struck Istanbul at 3am local time. Turkey declared state of emergency; lira fell 4% on reconstruction cost fears.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'USD/TRY', direction: 1, magnitude: 'Large', movePercent: '+4.1%', reasoning: 'Lira collapses on disaster spending' }] },
-  { headline: 'Saudi Arabia extends voluntary oil production cut by 6 months', country: 'Saudi Arabia', lat: 24.6877, lon: 46.7219, impactLevel: 'High', category: 'Macro', summary: 'Riyadh announced 1mb/d voluntary cut extension through Q2, pushing Brent above $95. Inflation outlook worsened in oil-importing nations.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'USD/NOK', direction: -1, magnitude: 'Medium', movePercent: '-0.6%', reasoning: 'Krone strengthens on oil price rise' }] },
-  { headline: 'North Korea fires ICBM over Japan into Pacific Ocean', country: 'North Korea', lat: 39.0392, lon: 125.7625, impactLevel: 'High', category: 'Geopolitical', summary: 'DPRK launched Hwasong-17 ICBM over Hokkaido, landing 200km inside Japanese EEZ. Yen spiked on safe-haven demand.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'USD/JPY', direction: -1, magnitude: 'Medium', movePercent: '-0.7%', reasoning: 'Yen safe-haven surge on DPRK launch' }, { pair: 'USD/KRW', direction: 1, magnitude: 'Medium', movePercent: '+0.8%', reasoning: 'Won weakens on Korea peninsula tension' }] },
-  { headline: 'Brazil central bank cuts Selic rate to 10.5% amid easing cycle', country: 'Brazil', lat: -15.7975, lon: -47.8919, impactLevel: 'Medium', category: 'Central Bank', summary: 'Banco do Brasil reduced benchmark rate 50bp in unanimous decision. Real weakened slightly as carry-trade appeal diminished.', sentiment: 'Neutral market sentiment', forexImpacts: [{ pair: 'USD/BRL', direction: 1, magnitude: 'Small', movePercent: '+0.3%', reasoning: 'Real softens on lower carry yield' }] },
-  { headline: 'UK inflation rises to 4.2%, above BOE 2% target for 14th month', country: 'United Kingdom', lat: 51.5074, lon: -0.1278, impactLevel: 'Medium', category: 'Macro', summary: 'UK CPI surprised to the upside at 4.2%, forcing Bank of England to delay expected rate cuts. Sterling rallied on higher-for-longer bets.', sentiment: 'Positive market sentiment', forexImpacts: [{ pair: 'GBP/USD', direction: 1, magnitude: 'Medium', movePercent: '+0.4%', reasoning: 'Cable rises on sticky inflation' }] },
-  { headline: 'US imposes fresh sanctions on Iranian oil exports via third parties', country: 'Iran', lat: 35.6892, lon: 51.3890, impactLevel: 'Medium', category: 'Sanctions', summary: 'Treasury OFAC designated 5 Chinese shipping firms aiding Iranian oil exports. Oil prices rose 1.5% on supply tightening fears.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'USD/CNY', direction: 1, magnitude: 'Small', movePercent: '+0.2%', reasoning: 'Yuan pressure on secondary sanctions risk' }] },
-  { headline: 'Argentina peso devalued 30% as IMF deal reaches restructuring terms', country: 'Argentina', lat: -34.6037, lon: -58.3816, impactLevel: 'Medium', category: 'Macro', summary: 'Milei government devalued ARS 30% in surprise overnight move as IMF agreed $44B restructuring. Bond yields fell sharply.', sentiment: 'Positive market sentiment', forexImpacts: [{ pair: 'USD/ARS', direction: 1, magnitude: 'Large', movePercent: '+30%', reasoning: 'Official peso devaluation to IMF-agreed rate' }] },
-  { headline: 'Kenya floods displace 200,000; humanitarian crisis declared', country: 'Kenya', lat: -1.2921, lon: 36.8219, impactLevel: 'Medium', category: 'Natural Disaster', summary: 'Worst floods in 30 years hit Nairobi and the Rift Valley. World Bank activated $500M emergency facility; shilling weakened.', sentiment: 'Negative market sentiment', forexImpacts: [{ pair: 'USD/KES', direction: 1, magnitude: 'Small', movePercent: '+0.5%', reasoning: 'Shilling pressured on emergency spending' }] },
-  { headline: 'Reserve Bank of Australia holds rates at 4.35% for third meeting', country: 'Australia', lat: -33.8688, lon: 151.2093, impactLevel: 'Low', category: 'Central Bank', summary: 'RBA kept the cash rate unchanged as board assessed lagging inflation data. AUD was little changed as decision was fully priced.', sentiment: 'Neutral market sentiment', forexImpacts: [{ pair: 'AUD/USD', direction: 1, magnitude: 'Small', movePercent: '+0.1%', reasoning: 'Slight relief as no hike delivered' }] },
-  { headline: 'Japan-EU sign digital trade agreement at Tokyo summit', country: 'Japan', lat: 35.6762, lon: 139.6503, impactLevel: 'Low', category: 'Political', summary: 'Japan and EU finalised landmark digital trade rules covering AI, data flows and e-commerce. Minimal immediate market impact.', sentiment: 'Positive market sentiment', forexImpacts: [] },
-  { headline: 'Canada posts stronger-than-expected Q4 GDP at 2.8% annualised', country: 'Canada', lat: 45.4215, lon: -75.6972, impactLevel: 'Low', category: 'Macro', summary: 'Statistics Canada GDP beat consensus of 2.2%, reducing pressure for Bank of Canada rate cuts in Q2. Loonie firmed modestly.', sentiment: 'Positive market sentiment', forexImpacts: [{ pair: 'USD/CAD', direction: -1, magnitude: 'Small', movePercent: '-0.2%', reasoning: 'Loonie firms on strong GDP beat' }] },
-  { headline: 'Swiss National Bank holds rates at 1.0%; signals no near-term cuts', country: 'Switzerland', lat: 46.9481, lon: 7.4474, impactLevel: 'Low', category: 'Central Bank', summary: 'SNB left rates steady, noting inflation at 1.4% within target band. Franc moved marginally; decision in line with expectations.', sentiment: 'Neutral market sentiment', forexImpacts: [{ pair: 'EUR/CHF', direction: 1, magnitude: 'Small', movePercent: '+0.1%', reasoning: 'Slight franc softening on hold decision' }] },
-  { headline: 'Singapore expands MAS green bond framework for ASEAN issuers', country: 'Singapore', lat: 1.3521, lon: 103.8198, impactLevel: 'Low', category: 'Macro', summary: 'Monetary Authority of Singapore expanded green bond guidelines to include ASEAN sovereign issuers, attracting $2B in pipeline deals.', sentiment: 'Positive market sentiment', forexImpacts: [] },
-]
+import { SEED_EVENTS } from '@/lib/news/seedData'
 
-// ── Category sanitizer — DB enforces strict check constraint ─────────────────
 const VALID_CATEGORIES = new Set([
   'Geopolitical', 'Central Bank', 'Macro', 'Political',
   'Crisis', 'Sanctions', 'Earnings', 'Natural Disaster',
@@ -41,70 +18,100 @@ function sanitizeCategory(raw: string): string {
   if (r.includes('crisis') || r.includes('emergency') || r.includes('collapse')) return 'Crisis'
   if (r.includes('politic') || r.includes('election') || r.includes('government') || r.includes('diplomatic')) return 'Political'
   if (r.includes('earn') || r.includes('profit') || r.includes('corporate') || r.includes('stock')) return 'Earnings'
-  return 'Macro' // safe fallback
+  return 'Macro'
 }
 
 let lastAttemptMs = 0
 let lastSuccessMs = 0
 let failureStreak = 0
 
+function hashStr(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function publishedAtIso(
+  hoursAgoRaw: unknown,
+  seedKey: string,
+  nowMs: number,
+): string {
+  let h: number;
+  if (
+    typeof hoursAgoRaw === 'number' &&
+    isFinite(hoursAgoRaw) &&
+    hoursAgoRaw >= 0 &&
+    hoursAgoRaw <= 24
+  ) {
+    h = hoursAgoRaw;
+  } else {
+    h = 0.3 + (hashStr(seedKey) % 1000) / 1000 * 23.4;
+  }
+  return new Date(nowMs - h * 3_600_000).toISOString();
+}
+
 const RETRY_GAP_MS   = 2 * 60 * 1000
 const REFRESH_GAP_MS = 4 * 60 * 60 * 1000
 const TARGET_EVENTS  = 20
 
-async function deleteAiAutoEvents() {
-  const snapshot = await adminDb.collection('events').where('created_by', '==', 'ai-auto').get()
-  const batch = adminDb.batch()
-  snapshot.docs.forEach(doc => batch.delete(doc.ref))
-  if (snapshot.size > 0) {
-    await batch.commit()
-  }
-}
+export const maxDuration = 300
 
 export async function GET(request: NextRequest) {
   const cronSecret  = request.headers.get('x-cron-secret')
   const adminSecret = request.headers.get('x-admin-secret')
+  const authHeader  = request.headers.get('authorization')
   const isDev       = process.env.NODE_ENV === 'development'
   const isForced    = request.nextUrl.searchParams.get('force') === '1'
 
-  if (!isDev && cronSecret !== process.env.CRON_SECRET && adminSecret !== process.env.ADMIN_SECRET) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const hasCronAuth  = cronSecret === process.env.CRON_SECRET
+    || authHeader === `Bearer ${process.env.CRON_SECRET}`
+  const hasAdminAuth = adminSecret === process.env.ADMIN_SECRET
+  const isAuthed     = isDev || hasCronAuth || hasAdminAuth
 
-  const nowMs    = Date.now()
-  const now      = new Date(nowMs)
-
-  // ── Guard 1: 4-hour success cadence ──────────────────────────────────────
-  if (!isForced && lastSuccessMs > 0 && nowMs - lastSuccessMs < REFRESH_GAP_MS) {
+  if (!isAuthed) {
     const snapshot = await adminDb.collection('events')
-      .where('expires_at', '>=', now.toISOString())
-      .count()
+      .where('expires_at', '>=', new Date().toISOString())
+      .limit(TARGET_EVENTS)
       .get()
-      
-    const count = snapshot.data().count
-
-    if (count >= TARGET_EVENTS) {
-      const nextIn = Math.round((REFRESH_GAP_MS - (nowMs - lastSuccessMs)) / 60_000)
-      return NextResponse.json({ success: true, skipped: true, message: `${count} events live. Next refresh in ~${nextIn}min` })
+    if (snapshot.size >= TARGET_EVENTS) {
+      return NextResponse.json({ success: true, skipped: true, message: `${snapshot.size} events live` })
     }
   }
 
-  // ── Guard 2: 2-minute retry gap (rate-limit safety) ───────────────────────
+  const nowMs = Date.now()
+  const now = new Date(nowMs)
+
+  if (!isForced && lastSuccessMs > 0 && nowMs - lastSuccessMs < REFRESH_GAP_MS) {
+    const snapshot = await adminDb.collection('events')
+      .where('expires_at', '>=', now.toISOString())
+      .limit(TARGET_EVENTS)
+      .get()
+    
+    if (snapshot.size >= TARGET_EVENTS) {
+      const nextIn = Math.round((REFRESH_GAP_MS - (nowMs - lastSuccessMs)) / 60_000)
+      return NextResponse.json({ success: true, skipped: true, message: `${snapshot.size} events live. Next refresh in ~${nextIn}min` })
+    }
+  }
+
   if (!isForced && lastAttemptMs > 0 && nowMs - lastAttemptMs < RETRY_GAP_MS) {
     const waitSec = Math.round((RETRY_GAP_MS - (nowMs - lastAttemptMs)) / 1000)
     return NextResponse.json({ success: true, skipped: true, message: `Rate guard — retry in ${waitSec}s (streak: ${failureStreak})` })
   }
 
-  // ── Build prompt ──────────────────────────────────────────────────────────
   const prompt = `You are a real-time geopolitical and financial markets intelligence analyst. Today is ${now.toUTCString()}.
 
-Generate exactly 20 current global news events from the last 48 hours that significantly impact financial markets and geopolitical stability.
+Generate current global news events from the LAST 24 HOURS ONLY (today) that significantly impact financial markets and geopolitical stability.
 
-EXACTLY 5 events per impact tier — no more, no less:
-• Critical (5): Active armed conflicts, financial system shocks, mass-casualty events
-• High (5): Central bank decisions, major geopolitical escalations, large natural disasters
-• Medium (5): Sanctions, significant political crises, major economic data releases
-• Low (5): Diplomatic meetings, minor market moves, routine policy announcements
+TARGET: up to 5 events per impact tier (20 total) — 5 each is ideal:
+• Critical (≤5): Active armed conflicts, financial system shocks, mass-casualty events
+• High (≤5): Central bank decisions, major geopolitical escalations, large natural disasters
+• Medium (≤5): Sanctions, significant political crises, major economic data releases
+• Low (≤5): Diplomatic meetings, minor market moves, routine policy announcements
+
+QUALITY OVER QUANTITY: Only include REAL events that genuinely happened in the last 24 hours. If a tier has fewer than 5 genuine recent events, return fewer — even zero. NEVER invent filler or recycle old (>24h) news to hit a count.
 
 For EACH event, produce this EXACT JSON object with ALL fields populated:
 {
@@ -116,6 +123,7 @@ For EACH event, produce this EXACT JSON object with ALL fields populated:
   "category": "Geopolitical",
   "summary": "2-3 sentences: what happened, why it matters for markets, and what traders should watch. Be specific with numbers/percentages where possible. Max 300 chars.",
   "sentiment": "Negative market sentiment",
+  "hoursAgo": 6,
   "forexImpacts": [
     { "pair": "EUR/USD", "direction": -1, "magnitude": "Large", "movePercent": "-0.8%", "reasoning": "Risk-off flight from euro assets" },
     { "pair": "USD/JPY", "direction": -1, "magnitude": "Medium", "movePercent": "-0.5%", "reasoning": "Yen safe-haven demand" }
@@ -129,15 +137,14 @@ CRITICAL RULES — violations will make the data useless:
 4. Geographic spread: events must span at least 5 different continents/regions
 5. No two events at the same location
 6. Use REAL ongoing situations: Russia-Ukraine war, Israel-Gaza conflict, India-Pakistan tensions, Fed/ECB/BOJ policy, China-Taiwan, Trump tariffs, OPEC cuts, commodity prices, EM currency crises
+7. hoursAgo: integer 0-24 — how many hours ago THIS specific event actually happened (must be ≤24, i.e. today). SPREAD values realistically across 0-24; do NOT give every event the same value.
 
-Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no explanation, no preamble.`
+Return ONLY a raw JSON array of up to 20 objects. No markdown fences, no explanation, no preamble.`
 
-  // Record attempt BEFORE API calls
   lastAttemptMs = nowMs
   let responseText = ''
   let modelUsed    = ''
 
-  // ── 1. Try Groq (primary — 14,400 RPD, no IP restrictions) ───────────────
   const groqKey = process.env.GROQ_API_KEY
   if (groqKey) {
     const groqModels = ['llama-3.3-70b-versatile', 'llama3-70b-8192', 'mixtral-8x7b-32768']
@@ -157,11 +164,9 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
     }
   }
 
-  // ── 2. Try Gemini (fallback) ───────────────────────────────────────────────
   const geminiKey = process.env.GEMINI_API_KEY
   if (!responseText && geminiKey) {
-    // gemini-2.0-flash-lite might be invalid or require preview suffix. Using stable models.
-    const geminiModels = ['gemini-2.0-flash', 'gemini-1.5-flash']
+    const geminiModels = ['gemini-2.0-flash-lite', 'gemini-2.0-flash']
     for (const model of geminiModels) {
       try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`
@@ -169,13 +174,9 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.4, maxOutputTokens: 4096 } }),
-          signal: AbortSignal.timeout(60_000), // Increased from 25s to 60s to allow time for 20 complex JSON objects
+          signal: AbortSignal.timeout(25_000),
         })
-        if (!res.ok) {
-          const errText = await res.text()
-          console.warn(`[Gemini] ${model} HTTP ${res.status}: ${errText.slice(0, 100)}`)
-          continue
-        }
+        if (!res.ok) { console.warn(`[Gemini] ${model} HTTP ${res.status}`); continue }
         const data = await res.json()
         responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
         if (responseText) { modelUsed = `gemini:${model}`; console.log(`[Gemini] ✅ ${model} (${responseText.length} chars)`); break }
@@ -183,26 +184,27 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
     }
   }
 
-  // ── 3. Seed fallback — globe is never empty ────────────────────────────────
   if (!responseText) {
     failureStreak++
     console.warn(`[News] All AI providers failed (streak: ${failureStreak}). Inserting seed events.`)
-    await deleteAiAutoEvents()
-    const seedRows = SEED_EVENTS.map(e => ({
+    const existing = await adminDb.collection('events').where('created_by', '==', 'ai-auto').get()
+    const batch = adminDb.batch()
+    existing.docs.forEach(doc => batch.delete(doc.ref))
+    
+    const seedRows = SEED_EVENTS.map((e) => ({
       headline: e.headline, country: e.country, lat: e.lat, lon: e.lon,
       impact_level: e.impactLevel, category: e.category, summary: e.summary,
       sentiment: e.sentiment, forex_impacts: e.forexImpacts,
       confidence_score: e.impactLevel === 'Critical' ? 90 : e.impactLevel === 'High' ? 80 : 70,
       is_market_moving: e.impactLevel === 'Critical' || e.impactLevel === 'High',
-      published_at: now.toISOString(),
+      published_at: publishedAtIso(undefined, e.headline, nowMs),
       expires_at:   new Date(nowMs + 48 * 3_600_000).toISOString(),
       source_url: null, created_by: 'ai-auto' as const,
-      created_at: now.toISOString()
     }))
     
-    const batch = adminDb.batch()
     seedRows.forEach(row => {
-      batch.set(adminDb.collection('events').doc(), row)
+      const ref = adminDb.collection('events').doc()
+      batch.set(ref, row)
     })
     await batch.commit()
     
@@ -210,7 +212,6 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
     return NextResponse.json({ success: true, seeded: seedRows.length, failureStreak, retryInSec: Math.round(RETRY_GAP_MS / 1000) })
   }
 
-  // ── Parse JSON ────────────────────────────────────────────────────────────
   let rawEvents: any[] = []
   try {
     const clean = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
@@ -222,7 +223,6 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
     return NextResponse.json({ error: 'JSON parse failed', raw: responseText.slice(0, 200) }, { status: 500 })
   }
 
-  // ── Enforce 5 per tier ────────────────────────────────────────────────────
   const TIERS = ['Critical', 'High', 'Medium', 'Low'] as const
   const buckets: Record<string, any[]> = { Critical: [], High: [], Medium: [], Low: [] }
   for (const e of rawEvents) {
@@ -230,19 +230,22 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
     if (!buckets[t] || buckets[t].length >= 5) continue
     if (!e.headline || !e.country || typeof e.lat !== 'number' || typeof e.lon !== 'number') continue
     if (Math.abs(e.lat) < 0.01 && Math.abs(e.lon) < 0.01) continue
+    if (typeof e.hoursAgo === 'number' && e.hoursAgo > 24) continue
     buckets[t].push(e)
   }
   const validated = TIERS.flatMap(t => buckets[t])
-  console.log(`[News] Parsed ${validated.length} events via ${modelUsed} (C:${buckets.Critical.length} H:${buckets.High.length} M:${buckets.Medium.length} L:${buckets.Low.length})`)
+  console.log(`[News] Parsed ${validated.length} events via ${modelUsed} (C:\${buckets.Critical.length} H:\${buckets.High.length} M:\${buckets.Medium.length} L:\${buckets.Low.length})`)
 
   if (validated.length === 0) {
     failureStreak++
     return NextResponse.json({ error: 'No valid events parsed', raw: responseText.slice(0, 200) }, { status: 500 })
   }
 
-  // ── Replace DB events ─────────────────────────────────────────────────────
-  await deleteAiAutoEvents()
-  const rows = validated.map(e => ({
+  const existing = await adminDb.collection('events').where('created_by', '==', 'ai-auto').get()
+  const batch = adminDb.batch()
+  existing.docs.forEach(doc => batch.delete(doc.ref))
+
+  const rows = validated.map((e) => ({
     headline: String(e.headline).slice(0, 100), country: String(e.country).slice(0, 100),
     lat: Number(e.lat), lon: Number(e.lon), impact_level: e.impactLevel,
     category: sanitizeCategory(e.category || 'Geopolitical'), summary: String(e.summary || '').slice(0, 500),
@@ -250,32 +253,31 @@ Return ONLY a raw JSON array of exactly 20 objects. No markdown fences, no expla
     forex_impacts: Array.isArray(e.forexImpacts) ? e.forexImpacts : [],
     confidence_score: e.impactLevel === 'Critical' ? 90 : e.impactLevel === 'High' ? 80 : 70,
     is_market_moving: e.impactLevel === 'Critical' || e.impactLevel === 'High',
-    published_at: now.toISOString(), expires_at: new Date(nowMs + 48 * 3_600_000).toISOString(),
+    published_at: publishedAtIso(e.hoursAgo, String(e.headline), nowMs),
+    expires_at: new Date(nowMs + 48 * 3_600_000).toISOString(),
     source_url: null, created_by: 'ai-auto' as const,
-    created_at: now.toISOString()
   }))
 
-  try {
-    const batch = adminDb.batch()
-    const inserted: any[] = []
-    rows.forEach(row => {
-      const ref = adminDb.collection('events').doc()
-      batch.set(ref, row)
-      inserted.push({ id: ref.id, headline: row.headline, impact_level: row.impact_level, country: row.country, lat: row.lat, lon: row.lon })
-    })
-    await batch.commit()
-
-    lastSuccessMs = Date.now()
-    failureStreak = 0
-    console.log(`[News] ✅ Inserted ${inserted.length} AI events via ${modelUsed}. Next refresh in 4h.`)
-
-    return NextResponse.json({
-      success: true, model: modelUsed, created: inserted.length, nextRefreshIn: '4 hours',
-      tiers: { Critical: buckets.Critical.length, High: buckets.High.length, Medium: buckets.Medium.length, Low: buckets.Low.length },
-      events: inserted,
-    })
-  } catch (insertErr: any) {
-    failureStreak++
-    return NextResponse.json({ error: insertErr.message }, { status: 500 })
+  const inserted: any[] = []
+  for (const row of rows) {
+    const ref = adminDb.collection('events').doc()
+    batch.set(ref, row)
+    inserted.push({ id: ref.id, headline: row.headline, impact_level: row.impact_level, country: row.country, lat: row.lat, lon: row.lon })
   }
+  
+  try {
+    await batch.commit()
+  } catch (insertErr: any) {
+    failureStreak++; return NextResponse.json({ error: insertErr.message }, { status: 500 })
+  }
+
+  lastSuccessMs = Date.now()
+  failureStreak = 0
+  console.log(`[News] ✅ Inserted ${inserted.length} AI events via ${modelUsed}.`)
+
+  return NextResponse.json({
+    success: true, model: modelUsed, created: inserted.length,
+    tiers: { Critical: buckets.Critical.length, High: buckets.High.length, Medium: buckets.Medium.length, Low: buckets.Low.length },
+    events: inserted.map(e => ({ id: e.id, headline: e.headline, impactLevel: e.impact_level, country: e.country, lat: e.lat, lon: e.lon })),
+  })
 }

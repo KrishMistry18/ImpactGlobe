@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react'
 import { useGlobeStore } from '@/store/useGlobeStore'
 import { ImpactBadge } from './ImpactBadge'
+import { formatTimeAgo } from '@/lib/utils/format'
 
 export function NewsTicker() {
   const events = useGlobeStore((s) => s.events)
@@ -81,7 +82,7 @@ export function NewsTicker() {
               <span className="text-xs text-text-muted">•</span>
               <span className="text-xs text-text-secondary">{event.country}</span>
               <span className="text-xs text-text-muted">
-                {formatAge(event.publishedAt)}
+                {formatTimeAgo(event.publishedAt)}
               </span>
               {/* Separator */}
               <span className="inline-block w-12 border-l border-border-subtle/40" />
@@ -95,15 +96,4 @@ export function NewsTicker() {
       </div>
     </div>
   )
-}
-
-/** Format how long ago an event was published */
-function formatAge(publishedAt: string): string {
-  const diff = Date.now() - new Date(publishedAt).getTime()
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.floor(hrs / 24)}d ago`
 }

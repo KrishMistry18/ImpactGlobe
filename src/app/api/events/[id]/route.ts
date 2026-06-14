@@ -32,7 +32,7 @@ export async function GET(
       summary: data.summary,
       sentiment: data.sentiment,
       forexImpacts: data.forex_impacts || [],
-      confidenceScore: Number(data.confidence_score) * (data.confidence_score <= 1 ? 100 : 1),
+      confidenceScore: Number(data.confidence_score) * 100,
       isMarketMoving: data.is_market_moving,
       publishedAt: data.published_at,
       expiresAt: data.expires_at,

@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { adminDb } from '@/lib/firebase/admin'
 
-const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000  // events retention window
-const SIX_HOURS_MS         =  6 * 60 * 60 * 1000  // env cache / dedup retention
-const CLEANUP_INTERVAL_MS  =  1 * 60 * 60 * 1000  // run at most every 1 hour
+const SEVENTY_TWO_HOURS_MS = 72 * 60 * 60 * 1000  // 3 days retention window
+const CLEANUP_INTERVAL_MS  =  6 * 60 * 60 * 1000  // run at most every 6 hours
 
-// In-memory fallback for last run time (used if DB constraint blocks the marker row)
+// In-memory fallback for last run time
 let lastRunInMemory: Date | null = null
 
 async function deleteInBatches(query: FirebaseFirestore.Query) {
@@ -27,30 +26,6 @@ async function deleteInBatches(query: FirebaseFirestore.Query) {
   return deletedCount;
 }
 
-/**
- * GET /api/cron/cleanup
- *
- * Purges all data older than 6 hours across every table to ensure fresh, real-time data.
- *
- * RESILIENT DESIGN — no fixed time dependency:
- *   - Tracks last successful run in env_data_cache (key: 'cleanup_last_run')
- *   - On every call, checks if 1+ hours have passed since last run
- *   - If yes → purge. If no → skip (idempotent, safe to call frequently)
- *   - This means even if the server was offline, the cleanup
- *     will fire on the next heartbeat after it comes back online.
- *
- * Called by:
- *   - Vercel cron: every hour
- *   - Dev heartbeat: every hour (minute === 0)
- *   - Manually: any time with admin/cron secret
- *
- * Tables cleaned (data older than 6 hours):
- *   events            → created_at
- *   event_dedup_log   → created_at
- *   env_data_cache    → fetched_at  (zone data: wind, temp, AQI, sea temp)
- *   aqi_history       → recorded_at
- *   forex_cache       → last_updated (reset stale sparklines only)
- */
 export async function GET(request: NextRequest) {
   const cronSecret = request.headers.get('x-cron-secret')
   const adminSecret = request.headers.get('x-admin-secret')
@@ -63,9 +38,8 @@ export async function GET(request: NextRequest) {
 
   const now = new Date()
 
-  // ── Check last run time ────────────────────────────────────────────────────
+  // Check last run time
   if (!isForced) {
-    // Check in-memory first (fast, works even without DB migration)
     if (lastRunInMemory) {
       const msSince = now.getTime() - lastRunInMemory.getTime()
       if (msSince < CLEANUP_INTERVAL_MS) {
@@ -78,7 +52,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Also check DB (persists across server restarts)
     const lastRunDoc = await adminDb.collection('env_data_cache').doc('cleanup_last_run').get()
 
     if (lastRunDoc.exists) {
@@ -99,27 +72,25 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Events use a 48-hour retention window so playback always has 2 days of history.
-  const eventCutoff = new Date(now.getTime() - FORTY_EIGHT_HOURS_MS).toISOString()
-  // Env cache + dedup still use 6h — that data is refreshed frequently.
-  const envCutoff = new Date(now.getTime() - SIX_HOURS_MS).toISOString()
+  const eventCutoff = new Date(now.getTime() - SEVENTY_TWO_HOURS_MS).toISOString()
+  const envCutoff = new Date(now.getTime() - SEVENTY_TWO_HOURS_MS).toISOString()
   const results: Record<string, { deleted?: number; error?: string }> = {}
 
   console.log(`[Cleanup] Starting purge. Events cutoff: ${eventCutoff} | Env cutoff: ${envCutoff}`)
 
-  // ── 1. Events ──────────────────────────────────────────────────────────────
+  // 1. Events
   try {
     const query = adminDb.collection('events').where('created_at', '<', eventCutoff);
     const count = await deleteInBatches(query);
 
     results.events = { deleted: count }
-    console.log(`[Cleanup] events: deleted ${count} (older than 48h)`)
+    console.log(`[Cleanup] events: deleted ${count} (older than 72h)`)
   } catch (e: any) {
     results.events = { error: e.message }
     console.error('[Cleanup] events:', e.message)
   }
 
-  // ── 2. Event dedup log ─────────────────────────────────────────────────────
+  // 2. Event dedup log
   try {
     const query = adminDb.collection('event_dedup_log').where('created_at', '<', envCutoff);
     const count = await deleteInBatches(query);
@@ -131,8 +102,7 @@ export async function GET(request: NextRequest) {
     console.warn('[Cleanup] event_dedup_log:', e.message)
   }
 
-  // ── 3. Environmental data cache ────────────────────────────────────────────
-  // Delete zone rows older than 6 hours (but keep the cleanup_last_run marker)
+  // 3. Environmental data cache
   try {
     let deletedCount = 0;
     while (true) {
@@ -160,7 +130,7 @@ export async function GET(request: NextRequest) {
     console.error('[Cleanup] env_data_cache:', e.message)
   }
 
-  // ── 4. AQI history ─────────────────────────────────────────────────────────
+  // 4. AQI history
   try {
     const query = adminDb.collection('aqi_history').where('recorded_at', '<', envCutoff);
     const count = await deleteInBatches(query);
@@ -172,9 +142,7 @@ export async function GET(request: NextRequest) {
     console.warn('[Cleanup] aqi_history:', e.message)
   }
 
-  // ── 5. Forex cache — reset stale sparklines ────────────────────────────────
-  // Rows are upserted (never deleted), but sparkline arrays become stale.
-  // Reset any pair not updated in 6 hours so it refetches fresh data.
+  // 5. Forex cache — reset stale sparklines
   try {
     let updatedCount = 0;
     while (true) {
@@ -200,7 +168,7 @@ export async function GET(request: NextRequest) {
     console.warn('[Cleanup] forex_cache:', e.message)
   }
 
-  // ── Record this run ────────────────────────────────────────────────────────
+  // Record this run
   lastRunInMemory = now // always update in-memory
 
   try {

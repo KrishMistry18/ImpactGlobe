@@ -8,20 +8,12 @@ import type {
   EnvLayerType,
   EnvLayerData,
   ScreenPosition,
+  HoveredEnvPoint,
 } from "./types";
 
-export type HoveredEnvPoint =
-  | { type: "wind"; lat: number; lon: number; speed: number; direction: number }
-  | { type: "temperature"; lat: number; lon: number; tempC: number }
-  | {
-      type: "aqi";
-      lat: number;
-      lon: number;
-      aqi: number;
-      pm25: number;
-      category: string;
-    }
-  | { type: "sea_temp"; lat: number; lon: number; tempC: number };
+// Re-export so existing imports from "@/store/useGlobeStore" keep working
+// (the globe renderer/wrapper import HoveredEnvPoint from here).
+export type { HoveredEnvPoint } from "./types";
 
 interface GlobeState {
   // Events
@@ -68,7 +60,7 @@ interface GlobeState {
 const defaultFilters: Filters = {
   categories: [],
   impactLevels: [],
-  timeRange: "48h",
+  timeRange: "24h",
   searchQuery: "",
 };
 

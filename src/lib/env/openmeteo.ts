@@ -1,253 +1,145 @@
 import axios from "axios";
 import type { WindPoint, TempAnomalyPoint } from "@/store/types";
-import { type GlobeZone, generateZoneGrid } from "./zones";
 
-const BASE = "https://api.open-meteo.com/v1";
+const BASE = "https://api.open-meteo.com/v1/forecast";
 
 /**
- * Fetch wind data for a specific zone only
- * Much faster than fetching entire globe at once
+ * Open-Meteo free tier limits: 600 calls/min · 5,000/hour · 10,000/day.
+ * CRUCIALLY, every coordinate in a multi-location request counts as a
+ * separate call. The old code fetched thousands of points for wind AND
+ * temperature across 4 zones in parallel — tens of thousands of calls in a
+ * burst — which tripped HTTP 429 after the very first batch and left the
+ * cache with only fragments (e.g. Antarctica-only).
+ *
+ * This module fetches the WHOLE globe in a single combined pass:
+ *   - one request returns BOTH temperature and wind per location (each
+ *     location is billed once, not twice)
+ *   - a coarse grid keeps the total call count small
+ *   - batches are throttled to stay well under 600 calls/min
+ *   - 429 responses back off and retry
+ *
+ * A full 8° global pass is ~1,080 locations → comfortably within budget when
+ * run a few times a day from a background refresh (never on the request path).
  */
-export async function getWindGridForZone(
-  zone: GlobeZone,
-): Promise<WindPoint[]> {
-  const points: WindPoint[] = [];
-  const batchSize = 10;
 
-  // Generate grid points for this zone at 5° resolution (balanced for API limits)
-  const coords = generateZoneGrid(zone, 5);
+/** Default global sampling resolution in degrees. 8° = 45×24 ≈ 1,080 points. */
+const RESOLUTION = 8;
+const BATCH_SIZE = 100;
+/** Delay between batches. 100 calls / 12s ≈ 500 calls/min — under the 600 cap. */
+const BATCH_DELAY_MS = 12_000;
+
+export interface WeatherFetchResult {
+  wind: WindPoint[];
+  temp: TempAnomalyPoint[];
+  /** false if any batch failed after retries (caller may skip caching). */
+  complete: boolean;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Even global grid at the given resolution (degrees). */
+function globalGrid(resolution: number): { lat: number; lon: number }[] {
+  const pts: { lat: number; lon: number }[] = [];
+  for (let lat = -90; lat <= 90; lat += resolution) {
+    for (let lon = -180; lon < 180; lon += resolution) {
+      pts.push({ lat, lon });
+    }
+  }
+  return pts;
+}
+
+async function fetchBatchWithRetry(
+  params: Record<string, unknown>,
+  maxRetries = 4,
+): Promise<Record<string, unknown>[]> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const { data } = await axios.get(BASE, { params, timeout: 20_000 });
+      return Array.isArray(data) ? data : [data];
+    } catch (err) {
+      lastErr = err;
+      const status = (err as { response?: { status?: number } })?.response
+        ?.status;
+      // 429 = rate limited → wait substantially longer before retrying.
+      const base = status === 429 ? 15_000 : 1_500;
+      const wait = base * Math.pow(1.8, attempt) + Math.random() * 1_000;
+      if (attempt < maxRetries) await sleep(wait);
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Fetch temperature + wind for the whole globe in one throttled pass.
+ * SLOW BY DESIGN (~2 min for an 8° grid) to respect the rate limit, so this
+ * must only ever run off the request path (background refresh / cron).
+ */
+export async function fetchGlobalWeather(
+  resolution = RESOLUTION,
+): Promise<WeatherFetchResult> {
+  const coords = globalGrid(resolution);
+  const wind: WindPoint[] = [];
+  const temp: TempAnomalyPoint[] = [];
+  let failedBatches = 0;
+  const totalBatches = Math.ceil(coords.length / BATCH_SIZE);
 
   console.log(
-    `[OpenMeteo] Fetching wind for zone: ${zone.name} (${coords.length} points)`,
+    `[OpenMeteo] Global weather pass: ${coords.length} locations, ${totalBatches} batches @ ${resolution}°`,
   );
 
-  // Batch requests to avoid rate limiting
-  for (let i = 0; i < coords.length; i += batchSize) {
-    const batch = coords.slice(i, i + batchSize);
-    const latitudes = batch.map((c) => c.lat).join(",");
-    const longitudes = batch.map((c) => c.lon).join(",");
+  for (let i = 0; i < coords.length; i += BATCH_SIZE) {
+    const batch = coords.slice(i, i + BATCH_SIZE);
+    const params = {
+      latitude: batch.map((c) => c.lat).join(","),
+      longitude: batch.map((c) => c.lon).join(","),
+      current: "temperature_2m,wind_speed_10m,wind_direction_10m",
+      wind_speed_unit: "ms", // default km/h would inflate speeds 3.6×
+      forecast_days: 1,
+    };
 
     try {
-      const { data } = await axios.get(`${BASE}/forecast`, {
-        params: {
-          latitude: latitudes,
-          longitude: longitudes,
-          current: "wind_speed_10m,wind_direction_10m",
-          wind_speed_unit: "ms", // Force m/s — default is km/h which causes 3.6× inflation
-          forecast_days: 1,
-        },
-        timeout: 10000,
-      });
+      const results = await fetchBatchWithRetry(params);
+      results.forEach((result, idx) => {
+        const cur = result.current as Record<string, number> | undefined;
+        const coord = batch[idx];
+        if (!cur || !coord) return;
 
-      // Handle single or multiple results
-      const results = Array.isArray(data) ? data : [data];
-      results.forEach((result: Record<string, unknown>, idx: number) => {
-        const current = result.current as Record<string, number> | undefined;
-        if (current?.wind_speed_10m !== undefined) {
-          const speed = current.wind_speed_10m;
-          // Sanity check: real wind speeds are 0-70 m/s even in extreme hurricanes
-          // Values above 70 indicate a unit mismatch or API error — skip them
-          if (speed < 0 || speed > 70) return;
-          points.push({
-            lat: batch[idx].lat,
-            lon: batch[idx].lon,
+        const t = cur.temperature_2m;
+        if (t !== undefined) {
+          temp.push({
+            lat: coord.lat,
+            lon: coord.lon,
+            anomalyC: Math.round(t * 10) / 10,
+          });
+        }
+
+        const speed = cur.wind_speed_10m;
+        if (speed !== undefined && speed >= 0 && speed <= 70) {
+          wind.push({
+            lat: coord.lat,
+            lon: coord.lon,
             speed: Math.round(speed * 10) / 10,
-            direction: current.wind_direction_10m ?? 0,
+            direction: cur.wind_direction_10m ?? 0,
           });
         }
       });
     } catch (err) {
+      failedBatches++;
       console.warn(
-        `[OpenMeteo] Failed to fetch wind batch for ${zone.name}:`,
-        err,
+        `[OpenMeteo] Batch ${i / BATCH_SIZE + 1}/${totalBatches} failed:`,
+        (err as { response?: { status?: number } })?.response?.status ?? err,
       );
     }
 
-    // Delay between batches to respect rate limits (1 second = 60 requests/minute max)
-    if (i + batchSize < coords.length) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
+    if (i + BATCH_SIZE < coords.length) await sleep(BATCH_DELAY_MS);
   }
 
+  const complete = failedBatches === 0;
   console.log(
-    `[OpenMeteo] Fetched ${points.length} wind points for ${zone.name}`,
+    `[OpenMeteo] Global weather done: ${temp.length} temp, ${wind.length} wind pts, failedBatches=${failedBatches}/${totalBatches}, complete=${complete}`,
   );
-  return points;
-}
-
-/**
- * Fetch temperature anomalies for a specific zone
- */
-export async function getTempAnomaliesForZone(
-  zone: GlobeZone,
-): Promise<TempAnomalyPoint[]> {
-  const points: TempAnomalyPoint[] = [];
-  const batchSize = 10;
-
-  // 5° resolution — matches wind grid so IDW interpolation has equal density
-  const coords = generateZoneGrid(zone, 5);
-
-  console.log(
-    `[OpenMeteo] Fetching temperature for zone: ${zone.name} (${coords.length} points)`,
-  );
-
-  for (let i = 0; i < coords.length; i += batchSize) {
-    const batch = coords.slice(i, i + batchSize);
-    const latitudes = batch.map((c) => c.lat).join(",");
-    const longitudes = batch.map((c) => c.lon).join(",");
-
-    try {
-      const { data } = await axios.get(`${BASE}/forecast`, {
-        params: {
-          latitude: latitudes,
-          longitude: longitudes,
-          current: "temperature_2m",
-          forecast_days: 1,
-        },
-        timeout: 10000,
-      });
-
-      const results = Array.isArray(data) ? data : [data];
-      results.forEach((result: Record<string, unknown>, idx: number) => {
-        const current = result.current as Record<string, number> | undefined;
-        if (current?.temperature_2m !== undefined) {
-          // Store actual temperature (°C). The heatmap renders it on an absolute
-          // -40°C → 45°C scale so it matches real-world visualisations like Windy.
-          points.push({
-            lat: batch[idx].lat,
-            lon: batch[idx].lon,
-            anomalyC: Math.round(current.temperature_2m * 10) / 10,
-          });
-        }
-      });
-    } catch (err) {
-      console.warn(
-        `[OpenMeteo] Failed to fetch temp batch for ${zone.name}:`,
-        err,
-      );
-    }
-
-    if (i + batchSize < coords.length) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
-
-  console.log(
-    `[OpenMeteo] Fetched ${points.length} temp points for ${zone.name}`,
-  );
-  return points;
-}
-
-/**
- * LEGACY: Fetch wind for entire globe (SLOW - use zone-based instead)
- * Kept for backward compatibility
- */
-export async function getWindGrid(): Promise<WindPoint[]> {
-  const points: WindPoint[] = [];
-  const batchSize = 10;
-
-  // Generate lat/lon grid at 10° intervals
-  const coords: { lat: number; lon: number }[] = [];
-  for (let lat = -80; lat <= 80; lat += 10) {
-    for (let lon = -180; lon <= 170; lon += 10) {
-      coords.push({ lat, lon });
-    }
-  }
-
-  // Batch requests to avoid rate limiting
-  for (let i = 0; i < coords.length; i += batchSize) {
-    const batch = coords.slice(i, i + batchSize);
-    const latitudes = batch.map((c) => c.lat).join(",");
-    const longitudes = batch.map((c) => c.lon).join(",");
-
-    try {
-      const { data } = await axios.get(`${BASE}/forecast`, {
-        params: {
-          latitude: latitudes,
-          longitude: longitudes,
-          current: "wind_speed_10m,wind_direction_10m",
-          forecast_days: 1,
-        },
-        timeout: 10000,
-      });
-
-      // Handle single or multiple results
-      const results = Array.isArray(data) ? data : [data];
-      results.forEach((result: Record<string, unknown>, idx: number) => {
-        const current = result.current as Record<string, number> | undefined;
-        if (current?.wind_speed_10m !== undefined) {
-          points.push({
-            lat: batch[idx].lat,
-            lon: batch[idx].lon,
-            speed: current.wind_speed_10m,
-            direction: current.wind_direction_10m ?? 0,
-          });
-        }
-      });
-    } catch {
-      // Skip failed batches
-    }
-
-    // Small delay between batches to respect rate limits
-    if (i + batchSize < coords.length) {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-  }
-
-  return points;
-}
-
-/**
- * LEGACY: Fetch temperature anomalies for entire globe (SLOW)
- */
-export async function getTempAnomalies(): Promise<TempAnomalyPoint[]> {
-  const points: TempAnomalyPoint[] = [];
-  const batchSize = 10;
-
-  const coords: { lat: number; lon: number }[] = [];
-  for (let lat = -60; lat <= 70; lat += 15) {
-    for (let lon = -180; lon <= 165; lon += 15) {
-      coords.push({ lat, lon });
-    }
-  }
-
-  for (let i = 0; i < coords.length; i += batchSize) {
-    const batch = coords.slice(i, i + batchSize);
-    const latitudes = batch.map((c) => c.lat).join(",");
-    const longitudes = batch.map((c) => c.lon).join(",");
-
-    try {
-      const { data } = await axios.get(`${BASE}/forecast`, {
-        params: {
-          latitude: latitudes,
-          longitude: longitudes,
-          current: "temperature_2m",
-          forecast_days: 1,
-        },
-        timeout: 10000,
-      });
-
-      const results = Array.isArray(data) ? data : [data];
-      results.forEach((result: Record<string, unknown>, idx: number) => {
-        const current = result.current as Record<string, number> | undefined;
-        if (current?.temperature_2m !== undefined) {
-          // Store actual temperature (°C). The heatmap renders it on an absolute
-          // -40°C → 45°C scale so it matches real-world visualisations like Windy.
-          points.push({
-            lat: batch[idx].lat,
-            lon: batch[idx].lon,
-            anomalyC: Math.round(current.temperature_2m * 10) / 10,
-          });
-        }
-      });
-    } catch {
-      // Skip failed batches
-    }
-
-    if (i + batchSize < coords.length) {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-  }
-
-  return points;
+  return { wind, temp, complete };
 }

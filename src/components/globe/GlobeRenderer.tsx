@@ -3,6 +3,7 @@
 import {
   useRef,
   useEffect,
+  useState,
   useCallback,
   useImperativeHandle,
   forwardRef,
@@ -13,11 +14,20 @@ import { latLonToVector3, sunPosition } from "@/lib/geo/coordinates";
 import { IMPACT_COLORS, RIPPLE_CONFIG, easeInOut } from "./ripple.utils";
 import {
   createHeatmapTexture,
+  ensureSeaMask,
+  onSeaMaskReady,
+  isLandAt,
   findNearestWindPoint,
   findNearestTempPoint,
   findNearestAQIPoint,
   findNearestSeaTempPoint,
 } from "./heatmap.utils";
+import {
+  WindField,
+  createParticles,
+  stepParticles,
+  type Particle,
+} from "./windField";
 import type { GlobeEvent, ScreenPosition } from "@/store/types";
 import type { HoveredEnvPoint } from "@/store/useGlobeStore";
 
@@ -66,9 +76,12 @@ const STAR_RADIUS = 300;
 const AUTO_ROTATE_RESUME_MS = 4000;
 const SUN_UPDATE_INTERVAL_MS = 60_000;
 
-const EARTH_DAY_URL = "/assets/earth-day.jpg";
-const EARTH_NIGHT_URL = "/assets/earth-night.jpg";
-const COUNTRY_BORDERS_URL = "/assets/ne_110m_admin_0_countries.geojson";
+const EARTH_DAY_URL =
+  "https://unpkg.com/three-globe/example/img/earth-day.jpg";
+const EARTH_NIGHT_URL =
+  "https://unpkg.com/three-globe/example/img/earth-night.jpg";
+const COUNTRY_BORDERS_URL =
+  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson";
 
 // ─── Ripple marker internal type ─────────────────────────────────────────
 interface RippleMarker {
@@ -109,6 +122,10 @@ const GlobeRenderer = forwardRef<GlobeRef, GlobeRendererProps>(
     const earthMeshRef = useRef<THREE.Mesh | null>(null);
     const heatmapTextureRef = useRef<THREE.CanvasTexture | null>(null);
     const heatmapMeshRef = useRef<THREE.Mesh | null>(null);
+    // Wind streamline particle layer
+    const windMeshRef = useRef<THREE.Mesh | null>(null);
+    const windTextureRef = useRef<THREE.CanvasTexture | null>(null);
+    const windRafRef = useRef<number>(0);
 
     // Interaction refs
     const raycasterRef = useRef(new THREE.Raycaster());
@@ -540,7 +557,8 @@ const GlobeRenderer = forwardRef<GlobeRef, GlobeRendererProps>(
                 };
             } else if (
               currentLayer === "sea_temp" &&
-              layerData?.seaTemp?.length
+              layerData?.seaTemp?.length &&
+              !isLandAt(hitLat, hitLon) // no SST over land → report no data
             ) {
               const p = findNearestSeaTempPoint(
                 layerData.seaTemp,
@@ -814,6 +832,11 @@ const GlobeRenderer = forwardRef<GlobeRef, GlobeRendererProps>(
         if (container.contains(renderer.domElement)) {
           container.removeChild(renderer.domElement);
         }
+
+        // Reset refs so StrictMode double-mount doesn't break event syncing
+        prevEventsRef.current = [];
+        rippleMarkersRef.current = [];
+        hitMeshesRef.current.clear();
       };
     }, [
       createStarfield,
@@ -831,6 +854,13 @@ const GlobeRenderer = forwardRef<GlobeRef, GlobeRendererProps>(
       useEffect(() => {
       syncEventMarkers(events);
     }, [events, syncEventMarkers]);
+
+    // ─── Sea-temp land mask (loaded once; triggers a texture rebuild) ─────
+    const [seaMaskVersion, setSeaMaskVersion] = useState(0);
+    useEffect(() => {
+      ensureSeaMask();
+      return onSeaMaskReady(() => setSeaMaskVersion((v) => v + 1));
+    }, []);
 
     // ─── Apply heatmap texture when environmental layer changes ──────────
     useEffect(() => {
@@ -859,6 +889,8 @@ const GlobeRenderer = forwardRef<GlobeRef, GlobeRendererProps>(
           }
 
           const texture = new THREE.CanvasTexture(canvas);
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.ClampToEdgeWrapping;
           texture.needsUpdate = true;
           heatmapTextureRef.current = texture;
 
@@ -881,6 +913,114 @@ const GlobeRenderer = forwardRef<GlobeRef, GlobeRendererProps>(
           heatmapTextureRef.current = null;
         }
       }
+    }, [activeEnvLayer, envLayerData, seaMaskVersion]);
+
+    // ─── Animated wind streamlines (Windy-style) ─────────────────────────
+    useEffect(() => {
+      const scene = sceneRef.current;
+      if (!scene) return;
+
+      const stop = () => {
+        cancelAnimationFrame(windRafRef.current);
+        windRafRef.current = 0;
+        if (windMeshRef.current) {
+          scene.remove(windMeshRef.current);
+          windMeshRef.current.geometry.dispose();
+          (windMeshRef.current.material as THREE.Material).dispose();
+          windMeshRef.current = null;
+        }
+        if (windTextureRef.current) {
+          windTextureRef.current.dispose();
+          windTextureRef.current = null;
+        }
+      };
+
+      if (activeEnvLayer !== "wind" || !envLayerData?.wind?.length) {
+        stop();
+        return;
+      }
+
+      const CW = 1024;
+      const CH = 512;
+      const canvas = document.createElement("canvas");
+      canvas.width = CW;
+      canvas.height = CH;
+      const ctx = canvas.getContext("2d")!;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      windTextureRef.current = tex;
+
+      const geo = new THREE.SphereGeometry(GLOBE_RADIUS * 1.004, 64, 64);
+      const mat = new THREE.MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      scene.add(mesh);
+      windMeshRef.current = mesh;
+
+      const field = new WindField(
+        envLayerData.wind.map((p) => ({
+          lat: p.lat,
+          lon: p.lon,
+          speed: p.speed,
+          direction: p.direction,
+        })),
+      );
+      const particles: Particle[] = createParticles(1800);
+      const maxSpeed = field.maxSpeed || 1;
+
+      let last = 0;
+      const FRAME_MS = 1000 / 30;
+      const tick = (t: number) => {
+        windRafRef.current = requestAnimationFrame(tick);
+        if (t - last < FRAME_MS) return;
+        last = t;
+
+        stepParticles(particles, field, 0.05);
+        ctx.clearRect(0, 0, CW, CH);
+
+        for (const p of particles) {
+          const h = p.hist;
+          if (h.length < 4) continue;
+          const speedT = Math.min(1, p.speed / maxSpeed);
+          ctx.lineWidth = 0.6 + speedT * 1.6;
+          ctx.strokeStyle = `rgba(${(205 + 50 * speedT) | 0},245,255,${0.32 + 0.5 * speedT})`;
+          ctx.beginPath();
+          let started = false;
+          let prevLon = 0;
+          for (let k = 0; k + 1 < h.length; k += 2) {
+            const lat = h[k];
+            const lon = h[k + 1];
+            const x = ((lon + 180) / 360) * CW;
+            const y = ((90 - lat) / 180) * CH;
+            if (started && Math.abs(lon - prevLon) > 180) {
+              ctx.stroke();
+              ctx.beginPath();
+              started = false;
+            }
+            if (!started) {
+              ctx.moveTo(x, y);
+              started = true;
+            } else {
+              ctx.lineTo(x, y);
+            }
+            prevLon = lon;
+          }
+          ctx.stroke();
+        }
+        tex.needsUpdate = true;
+      };
+      windRafRef.current = requestAnimationFrame(tick);
+
+      return stop;
     }, [activeEnvLayer, envLayerData]);
 
     // ─── Expose flyTo via ref ────────────────────────────────────────────

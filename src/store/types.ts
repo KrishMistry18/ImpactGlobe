@@ -124,6 +124,18 @@ export interface SeaTempPoint {
   tempC: number; // Sea surface temperature in Celsius
 }
 
+/** Pre-interpolated dense grid from server-side IDW */
+export interface EnvGrid {
+  /** Row-major flat array: grid[row * width + col]. null = no data. */
+  values: (number | null)[];
+  width: number;   // 360
+  height: number;  // 181
+  latMin: number;  // -90
+  latMax: number;  // +90
+  lonMin: number;  // -180
+  lonMax: number;  // +179
+}
+
 export interface EnvLayerData {
   type: EnvLayerType;
   updatedAt: string;
@@ -134,6 +146,11 @@ export interface EnvLayerData {
   storms?: StormEvent[];
   tempAnomalies?: TempAnomalyPoint[];
   seaTemp?: SeaTempPoint[];
+  // Pre-interpolated grids (server-side IDW) — used for rendering
+  windGrid?: EnvGrid;
+  tempGrid?: EnvGrid;
+  aqiGrid?: EnvGrid;
+  seaTempGrid?: EnvGrid;
 }
 
 export interface Filters {
@@ -144,3 +161,21 @@ export interface Filters {
 }
 
 export type ScreenPosition = { x: number; y: number };
+
+/**
+ * A point on an environmental heatmap that the cursor is currently over.
+ * Lives here (rather than in the store) because it's a domain type consumed
+ * across the globe renderer, tooltip, and store.
+ */
+export type HoveredEnvPoint =
+  | { type: "wind"; lat: number; lon: number; speed: number; direction: number }
+  | { type: "temperature"; lat: number; lon: number; tempC: number }
+  | {
+      type: "aqi";
+      lat: number;
+      lon: number;
+      aqi: number;
+      pm25: number;
+      category: string;
+    }
+  | { type: "sea_temp"; lat: number; lon: number; tempC: number };

@@ -15,6 +15,7 @@ async function clearCache(type: string) {
   let count = 0;
 
   snapshot.docs.forEach((doc) => {
+    if (type === "all" && doc.id === "cleanup_last_run") return;
     batch.delete(doc.ref);
     count++;
   });
