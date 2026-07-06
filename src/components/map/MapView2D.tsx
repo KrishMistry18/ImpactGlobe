@@ -193,9 +193,9 @@ function buildHoverPoint(
 
 export default function MapView2D({ events, activeEnvLayer, envLayerData, onEventClick }: Props) {
   const containerRef    = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const mapRef          = useRef<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const markersLayerRef = useRef<any>(null);
   const envCleanupRef   = useRef<(() => void) | null>(null);
   const windCleanupRef  = useRef<(() => void) | null>(null);
@@ -220,16 +220,16 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
   useEffect(() => {
     const el = containerRef.current;
     if (!el || mapRef.current || initRef.current) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     if ((el as any)._leaflet_id) return;
     initRef.current = true;
 
     import("leaflet").then((L) => {
       if (!containerRef.current) { initRef.current = false; return; }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       if ((containerRef.current as any)._leaflet_id) { initRef.current = false; return; }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       delete (L.Icon.Default.prototype as any)._getIconUrl;
       L.Icon.Default.mergeOptions({
         iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
@@ -262,11 +262,11 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
       initRef.current = false;
       setMapReady(false);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, []);
 
   // ── Pulsing icon ──────────────────────────────────────────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const pulsingIcon = useCallback((L: any, color: string) => L.divIcon({
     className: "", iconSize: [22, 22], iconAnchor: [11, 11],
     html: `<div style="position:relative;width:22px;height:22px">
@@ -294,7 +294,7 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
         m.addTo(layer);
       });
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [events, activeEnvLayer, pulsingIcon, mapReady]);
 
   // ── Windy-style pixel heatmap + hover tooltip ─────────────────────────────
@@ -409,7 +409,7 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
         canvas.parentNode?.removeChild(canvas);
       };
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activeEnvLayer, envLayerData, mapReady, seaMaskVersion]);
 
   // ── Animated wind streamlines (Windy-style) ───────────────────────────────
@@ -476,7 +476,7 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
               ctx.beginPath();
               started = false;
             }
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             
             const pt = map.latLngToContainerPoint([lat, lon] as any);
             if (!started) {
               ctx.moveTo(pt.x, pt.y);
@@ -502,7 +502,7 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
       windCleanupRef.current?.();
       windCleanupRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activeEnvLayer, envLayerData, mapReady]);
 
   // ── Mouse-move hover tooltip ──────────────────────────────────────────────
@@ -524,7 +524,7 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
       const rect = el.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const latlng = map.containerPointToLatLng([px, py] as any);
       const lat = latlng.lat as number;
       const rawLon = latlng.lng as number;
@@ -542,7 +542,7 @@ export default function MapView2D({ events, activeEnvLayer, envLayerData, onEven
       el.removeEventListener("mousemove", onMouseMove);
       el.removeEventListener("mouseleave", onMouseLeave);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activeEnvLayer, envLayerData]);
 
   return (

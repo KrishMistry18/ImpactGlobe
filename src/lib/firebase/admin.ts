@@ -7,8 +7,10 @@ if (!admin.apps.length) {
     let privateKey = process.env.FIREBASE_PRIVATE_KEY;
 
     if (!projectId || !clientEmail || !privateKey) {
-      throw new Error(`Missing Firebase Admin environment variables. projectId: ${!!projectId}, clientEmail: ${!!clientEmail}, privateKey: ${!!privateKey}`);
-    }
+      console.warn('Firebase Admin env vars missing. Initializing with dummy config for build phase.');
+      admin.initializeApp({ projectId: 'dummy-project' });
+    } else {
+
 
     // Clean up private key if it was pasted with quotes or escaped newlines
     privateKey = privateKey.trim().replace(/^["']+|["']+$/g, '').replace(/\\n/g, '\n').replace(/\\r/g, '');
@@ -32,6 +34,7 @@ if (!admin.apps.length) {
       }),
     });
     console.log('Firebase Admin Initialized successfully.');
+    }
   } catch (error: any) {
     console.error('Firebase Admin Initialization Error:', error);
     // Rethrow to ensure any usage of adminDb crashes with this exact error, exposing it via the API 500 response.

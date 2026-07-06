@@ -10,7 +10,7 @@ const CACHE_MS = 172_800_000 // 48h
 
 let refreshing = false
 
-export const maxDuration = 300; // Allow up to 5 minutes on Vercel
+export const maxDuration = 60; // Max allowed on Vercel Hobby
 
 export async function GET() {
   try {

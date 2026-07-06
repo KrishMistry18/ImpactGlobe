@@ -57,7 +57,7 @@ const RETRY_GAP_MS   = 2 * 60 * 1000
 const REFRESH_GAP_MS = 4 * 60 * 60 * 1000
 const TARGET_EVENTS  = 20
 
-export const maxDuration = 300
+export const maxDuration = 60
 
 export async function GET(request: NextRequest) {
   const cronSecret  = request.headers.get('x-cron-secret')

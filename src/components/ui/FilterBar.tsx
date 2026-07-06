@@ -51,7 +51,7 @@ export function FilterBar() {
       timeRange: (searchParams.get("timeRange") as Filters_TimeRange) || "24h",
       searchQuery: searchParams.get("q") || "",
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   // Sync filters → URL.
